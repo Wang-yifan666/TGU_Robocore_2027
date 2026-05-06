@@ -1,0 +1,39 @@
+# class_id 映射表
+# 索引 0-34 分别映射到对应的 {color, name, type}
+
+[armor.class_id_map]
+0  = {color = "blue",       name = "sentry",  type = "small"}
+1  = {color = "red",        name = "sentry",  type = "small"}
+2  = {color = "extinguish", name = "sentry",  type = "small"}
+3  = {color = "blue",       name = "one",     type = "small"}
+4  = {color = "red",        name = "one",     type = "small"}
+5  = {color = "extinguish", name = "one",     type = "small"}
+6  = {color = "blue",       name = "two",     type = "small"}
+7  = {color = "red",        name = "two",     type = "small"}
+8  = {color = "extinguish", name = "two",     type = "small"}
+9  = {color = "blue",       name = "three",   type = "small"}
+10 = {color = "red",        name = "three",   type = "small"}
+11 = {color = "extinguish", name = "three",   type = "small"}
+12 = {color = "blue",       name = "four",    type = "small"}
+13 = {color = "red",        name = "four",    type = "small"}
+14 = {color = "extinguish", name = "four",    type = "small"}
+15 = {color = "blue",       name = "five",    type = "small"}
+16 = {color = "red",        name = "five",    type = "small"}
+17 = {color = "extinguish", name = "five",    type = "small"}
+18 = {color = "blue",       name = "outpost", type = "small"}
+19 = {color = "red",        name = "outpost", type = "small"}
+20 = {color = "extinguish", name = "outpost", type = "small"}
+21 = {color = "blue",       name = "base",    type = "big"}
+22 = {color = "red",        name = "base",    type = "big"}
+23 = {color = "extinguish", name = "base",    type = "big"}
+24 = {color = "purple",     name = "base",    type = "big"}
+25 = {color = "blue",       name = "base",    type = "small"}
+26 = {color = "red",        name = "base",    type = "small"}
+27 = {color = "extinguish", name = "base",    type = "small"}
+28 = {color = "purple",     name = "base",    type = "small"}
+29 = {color = "blue",       name = "three",   type = "big"}
+30 = {color = "red",        name = "three",   type = "big"}
+31 = {color = "extinguish", name = "three",   type = "big"}
+32 = {color = "blue",       name = "four",    type = "big"}
+33 = {color = "red",        name = "four",    type = "big"}
+34 = {color = "extinguish", name = "four",    type = "big"}

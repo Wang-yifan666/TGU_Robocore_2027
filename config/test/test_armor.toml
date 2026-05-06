@@ -1,0 +1,26 @@
+[lightbar]
+center_x = 100.0
+center_y = 100.0
+size_w = 10.0
+size_h = 40.0
+angle = 0.0
+
+[armor]
+lr_gap = 60.0
+
+[class_id_test]
+one_small = 3
+three_big = 29
+
+[keypoints]
+rect = [[50, 50], [110, 50], [110, 90], [50, 90]]
+offset_kp = [[100, 100], [180, 100], [180, 150], [100, 150]]
+yolo = [[200, 200], [240, 200], [240, 230], [200, 230]]
+small = [[0, 0], [10, 0], [10, 10], [0, 10]]
+
+offset = [10.0, 20.0]
+
+[expected]
+center_lb = [130.0, 100.0]
+center_class = [80.0, 70.0]
+center_offset = [150.0, 145.0]
