@@ -1,77 +1,35 @@
+// 输入：
+// 1. 灯条检测结果 Lightbar
+// 2. 检测结果 (class_id, confidence, box, armor_keypoints)
+// 3. ArmorProperty vector（由外部传入，不从全局或 TOML 读取）
+//
+// 输出：
+// 1. Armor 结构体（color, left/right, center, type, name, priority）
+// 2. 空间坐标 (xyz_in_gimbal / xyz_in_world / ypr / ypd)
+// 3. 归一化坐标 (center_norm)
+//
+// 职责：
+// Armor / Lightbar 的数据结构定义与几何计算
+// 不负责 TOML 解析（见 armor_config.hpp）
 #ifndef TGU_ROBOCORE_2027_APP_AUTO_AIM_ARMOR_HPP
 #define TGU_ROBOCORE_2027_APP_AUTO_AIM_ARMOR_HPP
 
-#pragma once
-
-#include <string>
-#include <tuple>
+#include <cstddef>
 #include <vector>
 
 #include <Eigen/Dense>
-#include <opencv2/opencv.hpp>
+#include <opencv2/core.hpp>
 
-#include "tools/tomlpp.hpp"
+#include "app/auto_aim/types.hpp"
 
-namespace auto_aim
+namespace app::auto_aim
 {
-
-	enum Color
-	{
-		red,
-		blue,
-		extinguish,
-		purple
-	};
-
-	const std::vector<std::string> COLORS = {"red", "blue", "extinguish", "purple"};
-
-	enum ArmorType
-	{
-		big,
-		small
-	};
-
-	const std::vector<std::string> ARMOR_TYPES = {"big", "small"};
-
-	enum ArmorName
-	{
-		one,
-		two,
-		three,
-		four,
-		five,
-		sentry,
-		outpost,
-		base,
-		not_armor
-	};
-
-	const std::vector<std::string> ARMOR_NAMES = {"one",    "two",     "three", "four",     "five",
-	                                              "sentry", "outpost", "base",  "not_armor"};
-
-	enum ArmorPriority
-	{
-		first = 1,
-		second,
-		third,
-		forth,
-		fifth
-	};
-
-	// armor_properties 表，从 config/app/auto_aim/armor_config.toml 加载
-	// 映射: class_id → {color, name, type}
-	extern const std::vector<std::tuple<Color, ArmorName, ArmorType>> armor_properties;
-
-	// 从 toml 配置加载 armor_properties 表
-	// 调用者需传入已解析好的 config["armor"]["class_id_map"] 子表
-	// 返回解析好的 vector
-	std::vector<std::tuple<Color, ArmorName, ArmorType>> load_armor_properties(
-	    const toml::table& class_id_map);
 
 	struct Lightbar
 	{
 		std::size_t id = 0;
-		Color color = extinguish;
+
+		ArmorColor color = ArmorColor::Unknown;
 
 		cv::Point2f center;
 		cv::Point2f top;
@@ -93,7 +51,7 @@ namespace auto_aim
 
 	struct Armor
 	{
-		Color color = extinguish;
+		ArmorColor color = ArmorColor::Unknown;
 		Lightbar left;
 		Lightbar right;
 
@@ -103,13 +61,13 @@ namespace auto_aim
 
 		std::vector<cv::Point2f> points;
 
-		double ratio = 0.0;       // 两灯条的中点连线与长灯条的长度之比
-		double side_ratio;        // 长灯条与短灯条的长度之比
-		double rectangular_error; // 灯条和中点连线所成夹角与π/2的差值
+		double ratio = 0.0;             // 两灯条的中点连线与长灯条的长度之比
+		double side_ratio = 0.0;        // 长灯条与短灯条的长度之比
+		double rectangular_error = 0.0; // 灯条和中点连线所成夹角与π/2的差值
 
-		ArmorType type = small;
-		ArmorName name = not_armor;
-		ArmorPriority priority = fifth;
+		ArmorType type = ArmorType::Unknown;
+		ArmorName name = ArmorName::NotArmor;
+		ArmorPriority priority = ArmorPriority::Unknown;
 
 		int class_id = -1;
 		cv::Rect box;
@@ -132,11 +90,15 @@ namespace auto_aim
 		Armor(const Lightbar& left, const Lightbar& right);
 
 		Armor(int class_id, float confidence, const cv::Rect& box,
-		      std::vector<cv::Point2f> armor_keypoints);
+		      std::vector<cv::Point2f> armor_keypoints,
+		      const std::vector<ArmorProperty>& armor_properties);
 
 		Armor(int class_id, float confidence, const cv::Rect& box,
-		      std::vector<cv::Point2f> armor_keypoints, cv::Point2f offset);
+		      std::vector<cv::Point2f> armor_keypoints, cv::Point2f offset,
+		      const std::vector<ArmorProperty>& armor_properties);
 
+		// 以下两个是 YOLO 双 id（color_id + num_id）的兼容构造方式
+		// 建议优先使用 class_id 映射
 		Armor(int color_id, int num_id, float confidence, const cv::Rect& box,
 		      std::vector<cv::Point2f> armor_keypoints);
 
@@ -144,6 +106,6 @@ namespace auto_aim
 		      std::vector<cv::Point2f> armor_keypoints, cv::Point2f offset);
 	};
 
-} // namespace auto_aim
+} // namespace app::auto_aim
 
 #endif // TGU_ROBOCORE_2027_APP_AUTO_AIM_ARMOR_HPP
