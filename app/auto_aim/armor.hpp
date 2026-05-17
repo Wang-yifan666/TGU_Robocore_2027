@@ -2,12 +2,12 @@
 // 1. 灯条检测结果 Lightbar
 // 2. 检测结果 (class_id, confidence, box, armor_keypoints)
 // 3. ArmorProperty vector（由外部传入，不从全局或 TOML 读取）
-//
+
 // 输出：
 // 1. Armor 结构体（color, left/right, center, type, name, priority）
 // 2. 空间坐标 (xyz_in_gimbal / xyz_in_world / ypr / ypd)
 // 3. 归一化坐标 (center_norm)
-//
+
 // 职责：
 // Armor / Lightbar 的数据结构定义与几何计算
 // 不负责 TOML 解析（见 armor_config.hpp）

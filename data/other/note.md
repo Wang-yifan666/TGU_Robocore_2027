@@ -6,3 +6,6 @@
 
 鸽了 log ，先把多次定义的枚举等拿出来放到了 types.hpp 里面，准备下一步先处理 solver 模块
 
+### 2026.5.17
+
+先写 solver 需要的 tools/maths_tool 
