@@ -1,12 +1,7 @@
-// types.hpp
-
-// 包含如下：
-// 装甲板颜色（Red / Blue / Extinguish / Purple / Unknown）
-// 装甲板类型（Big / Small / Unknown）
-// 装甲板编号
-// 打击优先级
-// 上述三个属性的集合（color + name + type）
-// 每个枚举类型对应的字符串转换函数
+/**
+ * @file types.hpp
+ * @brief 自瞄模块基础类型定义：装甲板颜色、类型、编号、优先级及其字符串转换。
+ */
 
 #ifndef TGU_ROBOCORE_2027_AUTO_AIM_TYPES_HPP
 #define TGU_ROBOCORE_2027_AUTO_AIM_TYPES_HPP
@@ -17,6 +12,9 @@
 namespace app::auto_aim
 {
 
+	/**
+	 * @brief 装甲板颜色枚举。
+	 */
 	enum class ArmorColor : std::uint8_t
 	{
 		Red = 0,
@@ -26,6 +24,9 @@ namespace app::auto_aim
 		Unknown = 255
 	};
 
+	/**
+	 * @brief 装甲板尺寸类型枚举。
+	 */
 	enum class ArmorType : std::uint8_t
 	{
 		Big = 0,
@@ -33,6 +34,9 @@ namespace app::auto_aim
 		Unknown
 	};
 
+	/**
+	 * @brief 装甲板编号（机器人 ID）枚举。
+	 */
 	enum class ArmorName : std::uint8_t
 	{
 		One = 0,
@@ -46,6 +50,9 @@ namespace app::auto_aim
 		NotArmor = 255
 	};
 
+	/**
+	 * @brief 打击优先级枚举。
+	 */
 	enum class ArmorPriority : std::uint8_t
 	{
 		First = 1,
@@ -56,6 +63,9 @@ namespace app::auto_aim
 		Unknown = 255
 	};
 
+	/**
+	 * @brief 装甲板属性集合：颜色 + 编号 + 尺寸类型。
+	 */
 	struct ArmorProperty
 	{
 		ArmorColor color = ArmorColor::Unknown;
@@ -63,6 +73,11 @@ namespace app::auto_aim
 		ArmorType type = ArmorType::Unknown;
 	};
 
+	/**
+	 * @brief 将装甲板颜色枚举转换为可读字符串。
+	 * @param color 装甲板颜色。
+	 * @return 例如 "red"、"blue"、"unknown"。
+	 */
 	std::string_view to_string(ArmorColor color)
 	{
 		switch(color)
@@ -81,6 +96,11 @@ namespace app::auto_aim
 		}
 	}
 
+	/**
+	 * @brief 将装甲板类型枚举转换为可读字符串。
+	 * @param type 装甲板尺寸类型。
+	 * @return 例如 "big"、"small"、"unknown"。
+	 */
 	std::string_view to_string(ArmorType type)
 	{
 		switch(type)
@@ -95,6 +115,11 @@ namespace app::auto_aim
 		}
 	}
 
+	/**
+	 * @brief 将装甲板编号枚举转换为可读字符串。
+	 * @param name 装甲板编号。
+	 * @return 例如 "one"、"two"、"sentry"、"base"、"not_armor"。
+	 */
 	std::string_view to_string(ArmorName name)
 	{
 		switch(name)
@@ -121,6 +146,11 @@ namespace app::auto_aim
 		}
 	}
 
+	/**
+	 * @brief 将打击优先级枚举转换为可读字符串。
+	 * @param priority 打击优先级。
+	 * @return 例如 "first"、"second"、"unknown"。
+	 */
 	std::string_view to_string(ArmorPriority priority)
 	{
 		switch(priority)

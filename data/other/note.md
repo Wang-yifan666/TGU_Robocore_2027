@@ -8,4 +8,8 @@
 
 ### 2026.5.17
 
-先写 solver 需要的 tools/maths_tool 
+先写 solver 需要的 tools/maths_tools
+
+### 2026.5.25
+
+完成 tools/maths_tools 
