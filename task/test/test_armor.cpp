@@ -2,7 +2,7 @@
 #include "app/auto_aim/armor_config.hpp"
 #include "tools/tomlpp.hpp"
 
-#include <cstdio> 
+#include <cstdio>
 
 // 从 config 加载测试参数
 namespace
@@ -109,9 +109,8 @@ namespace
 			EXPECT_CENTER_OFFSET = load_pt(*center_offset_arr);
 
 		// 从主配置加载 armor_properties
-		auto armor_config =
-		    toml::parse_file(std::string(PROJECT_SOURCE_DIR)
-		                     + "/config/app/auto_aim/armor_config.toml");
+		auto armor_config = toml::parse_file(std::string(PROJECT_SOURCE_DIR)
+		                                     + "/config/app/auto_aim/armor_config.toml");
 		auto* class_id_map = armor_config["armor"]["class_id_map"].as_table();
 		if(class_id_map)
 		{
@@ -176,8 +175,7 @@ void TestArmorFromClassId()
 	printf("===== Test Armor from class_id =====\n");
 
 	app::auto_aim::Armor armor(CLASS_ID_ONE_SMALL, 0.85f, cv::Rect(50, 50, 60, 40),
-	                           {KP_RECT.data(), KP_RECT.data() + 4},
-	                           armor_properties);
+	                           {KP_RECT.data(), KP_RECT.data() + 4}, armor_properties);
 
 	printf("class_id: %d\n", armor.class_id);
 	printf("color: %d (expected blue=1)\n", static_cast<int>(armor.color));
@@ -185,11 +183,10 @@ void TestArmorFromClassId()
 	printf("type: %d (expected small=1)\n", static_cast<int>(armor.type));
 	printf("center: [%.0f, %.0f]\n", armor.center.x, armor.center.y);
 
-	bool pass =
-	    (armor.color == app::auto_aim::ArmorColor::Blue
-	     && armor.name == app::auto_aim::ArmorName::One
-	     && armor.type == app::auto_aim::ArmorType::Small
-	     && cv::norm(armor.center - EXPECT_CENTER_CLASS) < 1e-3);
+	bool pass = (armor.color == app::auto_aim::ArmorColor::Blue
+	             && armor.name == app::auto_aim::ArmorName::One
+	             && armor.type == app::auto_aim::ArmorType::Small
+	             && cv::norm(armor.center - EXPECT_CENTER_CLASS) < 1e-3);
 	printf("[%s] Armor from class_id test\n\n", pass ? "PASS" : "FAIL");
 }
 
@@ -198,17 +195,15 @@ void TestArmorFromClassIdWithOffset()
 	printf("===== Test Armor from class_id with offset =====\n");
 
 	app::auto_aim::Armor armor(CLASS_ID_THREE_BIG, 0.9f, cv::Rect(100, 100, 80, 50),
-	                           {KP_OFFSET.data(), KP_OFFSET.data() + 4}, OFFSET,
-	                           armor_properties);
+	                           {KP_OFFSET.data(), KP_OFFSET.data() + 4}, OFFSET, armor_properties);
 
 	for(size_t i = 0; i < armor.points.size(); i++)
 		printf("  point[%zu]: [%.0f, %.0f]\n", i, armor.points[i].x, armor.points[i].y);
 
-	bool pass =
-	    (armor.color == app::auto_aim::ArmorColor::Blue
-	     && armor.name == app::auto_aim::ArmorName::Three
-	     && armor.type == app::auto_aim::ArmorType::Big
-	     && cv::norm(armor.center - EXPECT_CENTER_OFFSET) < 1e-3);
+	bool pass = (armor.color == app::auto_aim::ArmorColor::Blue
+	             && armor.name == app::auto_aim::ArmorName::Three
+	             && armor.type == app::auto_aim::ArmorType::Big
+	             && cv::norm(armor.center - EXPECT_CENTER_OFFSET) < 1e-3);
 	printf("[%s] Armor from class_id with offset test\n\n", pass ? "PASS" : "FAIL");
 }
 
@@ -232,7 +227,7 @@ void TestArmorFromYoloId()
 	printf("armor2 name: %d (expected one=0)\n", static_cast<int>(armor2.name));
 
 	pass = pass && armor2.color == app::auto_aim::ArmorColor::Red
-	       && armor2.name == app::auto_aim::ArmorName::One;
+	    && armor2.name == app::auto_aim::ArmorName::One;
 	printf("[%s] Armor from Yolo id test\n\n", pass ? "PASS" : "FAIL");
 }
 
@@ -258,8 +253,7 @@ void TestInvalidKeypoints()
 	printf("===== Test Invalid Keypoints (size < 4) =====\n");
 
 	std::vector<cv::Point2f> bad_kp = {cv::Point2f(0, 0), cv::Point2f(1, 1)};
-	app::auto_aim::Armor armor(3, 0.8f, cv::Rect(0, 0, 10, 10),
-	                           bad_kp, armor_properties);
+	app::auto_aim::Armor armor(3, 0.8f, cv::Rect(0, 0, 10, 10), bad_kp, armor_properties);
 
 	bool pass = (armor.color == app::auto_aim::ArmorColor::Unknown
 	             && armor.name == app::auto_aim::ArmorName::NotArmor

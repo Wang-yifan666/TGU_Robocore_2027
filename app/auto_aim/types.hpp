@@ -78,7 +78,7 @@ namespace app::auto_aim
 	 * @param color 装甲板颜色。
 	 * @return 例如 "red"、"blue"、"unknown"。
 	 */
-	std::string_view to_string(ArmorColor color)
+	inline std::string_view to_string(ArmorColor color)
 	{
 		switch(color)
 		{
@@ -101,7 +101,7 @@ namespace app::auto_aim
 	 * @param type 装甲板尺寸类型。
 	 * @return 例如 "big"、"small"、"unknown"。
 	 */
-	std::string_view to_string(ArmorType type)
+	inline std::string_view to_string(ArmorType type)
 	{
 		switch(type)
 		{
@@ -120,7 +120,7 @@ namespace app::auto_aim
 	 * @param name 装甲板编号。
 	 * @return 例如 "one"、"two"、"sentry"、"base"、"not_armor"。
 	 */
-	std::string_view to_string(ArmorName name)
+	inline std::string_view to_string(ArmorName name)
 	{
 		switch(name)
 		{
@@ -151,7 +151,7 @@ namespace app::auto_aim
 	 * @param priority 打击优先级。
 	 * @return 例如 "first"、"second"、"unknown"。
 	 */
-	std::string_view to_string(ArmorPriority priority)
+	inline std::string_view to_string(ArmorPriority priority)
 	{
 		switch(priority)
 		{

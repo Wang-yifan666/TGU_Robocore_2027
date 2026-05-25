@@ -111,7 +111,7 @@ namespace tools
 				euler[0] = half_sum + half_diff;
 				euler[2] = half_sum - half_diff;
 			}
-			else
+			else // 处理万向锁
 			{
 				if(!is_extrinsic)
 				{

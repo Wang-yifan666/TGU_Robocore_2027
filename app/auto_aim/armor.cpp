@@ -165,7 +165,7 @@ namespace app::auto_aim
 
 	} // namespace
 
-	// ======================== Lightbar 实现 ========================
+	// Lightbar 实现
 
 	Lightbar::Lightbar(const cv::RotatedRect& rotated_rect, std::size_t id):
 	id(id), rotated_rect(rotated_rect)
@@ -192,7 +192,7 @@ namespace app::auto_aim
 		ratio = width > 1e-6 ? length / width : 0.0;
 	}
 
-	// ======================== Armor 实现 ========================
+	// Armor 实现
 
 	Armor::Armor(const Lightbar& left, const Lightbar& right):
 	color(left.color), left(left), right(right), duplicated(false)

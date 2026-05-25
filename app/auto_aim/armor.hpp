@@ -2,15 +2,12 @@
  * @file armor.hpp
  * @brief 灯条（Lightbar）与装甲板（Armor）的数据结构定义与几何计算。
  *
- * 职责范围：
+ *   处理：
  * - Lightbar / Armor 数据结构定义
  * - 灯条几何参数计算（角度、长宽比等）
  * - 装甲板几何参数计算（中心点、矩形误差、宽高比等）
  * - 支持 class_id 映射与 YOLO 双 id 映射两种构造方式
  *
- * 不负责：
- * - TOML 解析（见 armor_config.hpp）
- * - PnP 求解（见 solver.hpp）
  */
 #ifndef TGU_ROBOCORE_2027_APP_AUTO_AIM_ARMOR_HPP
 #define TGU_ROBOCORE_2027_APP_AUTO_AIM_ARMOR_HPP
