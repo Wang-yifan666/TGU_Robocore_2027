@@ -12,4 +12,4 @@
 
 ### 2026.5.25
 
-完成 tools/maths_tools 和 solver 模块
+完成 tools/maths_tools 和 solver 模块,下次做测试
