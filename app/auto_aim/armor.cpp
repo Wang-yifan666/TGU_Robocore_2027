@@ -5,165 +5,161 @@
 
 namespace app::auto_aim
 {
-	namespace
+
+	void apply_offset(std::vector<cv::Point2f>& points, const cv::Point2f& offset)
 	{
-
-		void apply_offset(std::vector<cv::Point2f>& points, const cv::Point2f& offset)
+		for(auto& point: points)
 		{
-			for(auto& point: points)
-			{
-				point += offset;
-			}
+			point += offset;
+		}
+	}
+
+	bool check_keypoints(const std::vector<cv::Point2f>& keypoints)
+	{
+		return keypoints.size() == 4;
+	}
+
+	void set_invalid_armor(Armor& armor)
+	{
+		armor.color = ArmorColor::Unknown;
+		armor.name = ArmorName::NotArmor;
+		armor.type = ArmorType::Unknown;
+		armor.priority = ArmorPriority::Unknown;
+		armor.duplicated = false;
+	}
+
+	bool calculate_geometry(Armor& armor, const std::vector<cv::Point2f>& armor_keypoints)
+	{
+		if(!check_keypoints(armor_keypoints))
+		{
+			set_invalid_armor(armor);
+			return false;
 		}
 
-		bool check_keypoints(const std::vector<cv::Point2f>& keypoints)
+		armor.center =
+		    (armor_keypoints[0] + armor_keypoints[1] + armor_keypoints[2] + armor_keypoints[3])
+		    / 4.0F;
+
+		const auto left_width = cv::norm(armor_keypoints[0] - armor_keypoints[3]);
+		const auto right_width = cv::norm(armor_keypoints[1] - armor_keypoints[2]);
+		const auto max_width = std::max(left_width, right_width);
+
+		const auto top_length = cv::norm(armor_keypoints[0] - armor_keypoints[1]);
+		const auto bottom_length = cv::norm(armor_keypoints[3] - armor_keypoints[2]);
+		const auto max_length = std::max(top_length, bottom_length);
+
+		const auto left_center = (armor_keypoints[0] + armor_keypoints[3]) / 2.0F;
+		const auto right_center = (armor_keypoints[1] + armor_keypoints[2]) / 2.0F;
+		const auto left2right = right_center - left_center;
+
+		const auto roll = std::atan2(left2right.y, left2right.x);
+
+		const auto left_rectangular_error =
+		    std::abs(std::atan2((armor_keypoints[3] - armor_keypoints[0]).y,
+		                        (armor_keypoints[3] - armor_keypoints[0]).x)
+		             - roll - CV_PI / 2.0);
+
+		const auto right_rectangular_error =
+		    std::abs(std::atan2((armor_keypoints[2] - armor_keypoints[1]).y,
+		                        (armor_keypoints[2] - armor_keypoints[1]).x)
+		             - roll - CV_PI / 2.0);
+
+		// 防止除以 0
+		armor.rectangular_error = std::max(left_rectangular_error, right_rectangular_error);
+		armor.ratio = max_width > 1e-6 ? max_length / max_width : 0.0;
+
+		return true;
+	}
+
+	void set_armor_property_by_class_id(Armor& armor, int class_id,
+	                                    const std::vector<ArmorProperty>& armor_properties)
+	{
+		if(class_id >= 0 && class_id < static_cast<int>(armor_properties.size()))
 		{
-			return keypoints.size() == 4;
+			const auto& property = armor_properties[static_cast<std::size_t>(class_id)];
+
+			armor.color = property.color;
+			armor.name = property.name;
+			armor.type = property.type;
+		}
+		else
+		{
+			set_invalid_armor(armor);
+		}
+	}
+
+	// ---- YOLO 双 id 映射函数 ----
+
+	ArmorColor color_from_yolo_id(int color_id)
+	{
+		switch(color_id)
+		{
+		case 0:
+			return ArmorColor::Blue;
+		case 1:
+			return ArmorColor::Red;
+		case 2:
+			return ArmorColor::Extinguish;
+		case 3:
+			return ArmorColor::Purple;
+		default:
+			return ArmorColor::Unknown;
+		}
+	}
+
+	ArmorName name_from_yolo_id(int num_id)
+	{
+		switch(num_id)
+		{
+		case 0:
+			return ArmorName::Sentry;
+		case 1:
+			return ArmorName::One;
+		case 2:
+			return ArmorName::Two;
+		case 3:
+			return ArmorName::Three;
+		case 4:
+			return ArmorName::Four;
+		case 5:
+			return ArmorName::Five;
+		case 6:
+			return ArmorName::Outpost;
+		case 7:
+			return ArmorName::Base;
+		default:
+			return ArmorName::NotArmor;
+		}
+	}
+
+	ArmorType type_from_yolo_id(int num_id)
+	{
+		// class_id 映射优先；此处按配置惯例：id=1 为 big，其余 small
+		if(num_id == 1)
+		{
+			return ArmorType::Big;
 		}
 
-		void set_invalid_armor(Armor& armor)
+		if(num_id >= 0 && num_id <= 7)
 		{
-			armor.color = ArmorColor::Unknown;
-			armor.name = ArmorName::NotArmor;
+			return ArmorType::Small;
+		}
+
+		return ArmorType::Unknown;
+	}
+
+	void set_armor_property_by_yolo_id(Armor& armor, int color_id, int num_id)
+	{
+		armor.color = color_from_yolo_id(color_id);
+		armor.name = name_from_yolo_id(num_id);
+		armor.type = type_from_yolo_id(num_id);
+
+		if(armor.color == ArmorColor::Unknown || armor.name == ArmorName::NotArmor)
+		{
 			armor.type = ArmorType::Unknown;
 			armor.priority = ArmorPriority::Unknown;
-			armor.duplicated = false;
 		}
-
-		bool calculate_geometry(Armor& armor, const std::vector<cv::Point2f>& armor_keypoints)
-		{
-			if(!check_keypoints(armor_keypoints))
-			{
-				set_invalid_armor(armor);
-				return false;
-			}
-
-			armor.center =
-			    (armor_keypoints[0] + armor_keypoints[1] + armor_keypoints[2] + armor_keypoints[3])
-			    / 4.0F;
-
-			const auto left_width = cv::norm(armor_keypoints[0] - armor_keypoints[3]);
-			const auto right_width = cv::norm(armor_keypoints[1] - armor_keypoints[2]);
-			const auto max_width = std::max(left_width, right_width);
-
-			const auto top_length = cv::norm(armor_keypoints[0] - armor_keypoints[1]);
-			const auto bottom_length = cv::norm(armor_keypoints[3] - armor_keypoints[2]);
-			const auto max_length = std::max(top_length, bottom_length);
-
-			const auto left_center = (armor_keypoints[0] + armor_keypoints[3]) / 2.0F;
-			const auto right_center = (armor_keypoints[1] + armor_keypoints[2]) / 2.0F;
-			const auto left2right = right_center - left_center;
-
-			const auto roll = std::atan2(left2right.y, left2right.x);
-
-			const auto left_rectangular_error =
-			    std::abs(std::atan2((armor_keypoints[3] - armor_keypoints[0]).y,
-			                        (armor_keypoints[3] - armor_keypoints[0]).x)
-			             - roll - CV_PI / 2.0);
-
-			const auto right_rectangular_error =
-			    std::abs(std::atan2((armor_keypoints[2] - armor_keypoints[1]).y,
-			                        (armor_keypoints[2] - armor_keypoints[1]).x)
-			             - roll - CV_PI / 2.0);
-
-			// 防止除以 0
-			armor.rectangular_error = std::max(left_rectangular_error, right_rectangular_error);
-			armor.ratio = max_width > 1e-6 ? max_length / max_width : 0.0;
-
-			return true;
-		}
-
-		void set_armor_property_by_class_id(Armor& armor, int class_id,
-		                                    const std::vector<ArmorProperty>& armor_properties)
-		{
-			if(class_id >= 0 && class_id < static_cast<int>(armor_properties.size()))
-			{
-				const auto& property = armor_properties[static_cast<std::size_t>(class_id)];
-
-				armor.color = property.color;
-				armor.name = property.name;
-				armor.type = property.type;
-			}
-			else
-			{
-				set_invalid_armor(armor);
-			}
-		}
-
-		// ---- YOLO 双 id 映射函数 ----
-
-		ArmorColor color_from_yolo_id(int color_id)
-		{
-			switch(color_id)
-			{
-			case 0:
-				return ArmorColor::Blue;
-			case 1:
-				return ArmorColor::Red;
-			case 2:
-				return ArmorColor::Extinguish;
-			case 3:
-				return ArmorColor::Purple;
-			default:
-				return ArmorColor::Unknown;
-			}
-		}
-
-		ArmorName name_from_yolo_id(int num_id)
-		{
-			switch(num_id)
-			{
-			case 0:
-				return ArmorName::Sentry;
-			case 1:
-				return ArmorName::One;
-			case 2:
-				return ArmorName::Two;
-			case 3:
-				return ArmorName::Three;
-			case 4:
-				return ArmorName::Four;
-			case 5:
-				return ArmorName::Five;
-			case 6:
-				return ArmorName::Outpost;
-			case 7:
-				return ArmorName::Base;
-			default:
-				return ArmorName::NotArmor;
-			}
-		}
-
-		ArmorType type_from_yolo_id(int num_id)
-		{
-			// class_id 映射优先；此处按配置惯例：id=1 为 big，其余 small
-			if(num_id == 1)
-			{
-				return ArmorType::Big;
-			}
-
-			if(num_id >= 0 && num_id <= 7)
-			{
-				return ArmorType::Small;
-			}
-
-			return ArmorType::Unknown;
-		}
-
-		void set_armor_property_by_yolo_id(Armor& armor, int color_id, int num_id)
-		{
-			armor.color = color_from_yolo_id(color_id);
-			armor.name = name_from_yolo_id(num_id);
-			armor.type = type_from_yolo_id(num_id);
-
-			if(armor.color == ArmorColor::Unknown || armor.name == ArmorName::NotArmor)
-			{
-				armor.type = ArmorType::Unknown;
-				armor.priority = ArmorPriority::Unknown;
-			}
-		}
-
-	} // namespace
+	}
 
 	// Lightbar 实现
 

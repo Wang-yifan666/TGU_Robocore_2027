@@ -8,12 +8,11 @@
 
 #include "tools/maths_tools.hpp"
 
-namespace app
+namespace app::auto_aim
 {
 
-	namespace auto_aim
+	namespace
 	{
-
 		bool check_camera_matrix(const cv::Mat& camera_matrix)
 		{
 			return !camera_matrix.empty() && camera_matrix.rows == 3 && camera_matrix.cols == 3;
@@ -34,7 +33,7 @@ namespace app
 			return result;
 		}
 
-	} // namespace auto_aim
+	} // namespace
 
 	Solver::Solver(const SolverConfig& config):
 	config_(config), camera_matrix_(config.camera_matrix.clone()),
@@ -173,4 +172,4 @@ namespace app
 		return true;
 	}
 
-} // namespace app
+} // namespace app::auto_aim
