@@ -1,6 +1,7 @@
 add_library(tools STATIC
     crc.cpp
     logger.cpp
+    logger_config_loader.cpp
     maths_tools.cpp
     foxglove_comm.cpp
 )

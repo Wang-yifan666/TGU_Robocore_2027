@@ -1,0 +1,14 @@
+[logger]
+level = "debug"
+
+# 输出至终端
+enable_console = true
+
+# 保存文件
+enable_file = true
+
+# 报错日志是否立即刷新到文件
+flush_on_error = true
+
+# 日志保存目录
+file_path = "data/logs/robocore.log"

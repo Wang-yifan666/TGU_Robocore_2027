@@ -5,8 +5,10 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-#set(CMAKE_BUILD_TYPE Release)
-set(CMAKE_BUILD_TYPE Debug)
+# 默认采用 Debug
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type")
+endif()
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
@@ -26,3 +28,6 @@ add_subdirectory(io)
 add_subdirectory(tools)
 add_subdirectory(app)
 add_subdirectory(task)
+
+
+# 编译方式: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug / cmake -S . -B build -DCMAKE_BUILD_TYPE=Release

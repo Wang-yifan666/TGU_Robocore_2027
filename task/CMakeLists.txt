@@ -8,6 +8,10 @@ add_executable(test_armor test/test_armor.cpp)
 add_executable(test_solver test/test_solver.cpp)
 
 target_link_libraries(test_serial PRIVATE io tools)
+target_compile_definitions(test_logger PRIVATE
+    PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+)
+
 target_link_libraries(test_logger PRIVATE tools)
 target_link_libraries(test_foxglove PRIVATE tools)
 target_link_libraries(test_camera PRIVATE ${ARAVIS_LIBRARIES} ${OpenCV_LIBS})
