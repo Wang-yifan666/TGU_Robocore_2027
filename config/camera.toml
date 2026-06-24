@@ -1,0 +1,13 @@
+[usb_camera]
+device = "/dev/v4l/by-id/usb-lihappe8_Corp._USB_2.0_Camera-video-index0"
+width = 640
+height = 480
+fps = 30
+pixel_format = "MJPG"
+buffer_size = 1
+
+enable_manual_exposure = false
+exposure = 80.0
+
+enable_manual_gain = false
+gain = 0.0

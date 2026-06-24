@@ -1,22 +1,22 @@
 cmake_minimum_required(VERSION 3.16)
 
-# 创建目标 io
 add_library(io STATIC
-        serial/serial.cpp
-        hikrobot/hikrobot.cpp
-#        mindvision/mindvision.cpp
-#        usbcamera/usbcamera.cpp
-#        camera.cpp
-#        cboard.cpp
-#        dm_imu/dm_imu.cpp
-#        gimbal/gimbal.cpp
-#        gimbal/gimbal_nav.cpp
+    serial/serial.cpp
+    hikrobot/hikrobot.cpp
+    usbcamera/usbcamera.cpp
+    usbcamera/usbcamera_config.cpp
 )
 
 target_link_libraries(io
-        PUBLIC
-#        tools
-        boost_system
-        pthread
+    PUBLIC
+    tools
+    ${OpenCV_LIBS}
+    boost_system
+    pthread
 )
 
+target_include_directories(io
+    PUBLIC
+    ${PROJECT_SOURCE_DIR}
+    ${OpenCV_INCLUDE_DIRS}
+)

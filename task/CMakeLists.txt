@@ -6,6 +6,7 @@ add_executable(test_foxglove test/test_foxglove.cpp)
 add_executable(test_camera test/test_camera.cpp)
 add_executable(test_armor test/test_armor.cpp)
 add_executable(test_solver test/test_solver.cpp)
+add_executable(test_usb_camera test/test_usb_camera.cpp)
 
 target_link_libraries(test_serial PRIVATE io tools)
 target_compile_definitions(test_logger PRIVATE
@@ -39,4 +40,15 @@ target_link_libraries(test_solver PRIVATE
     tools
     ${OpenCV_LIBS}
     Eigen3::Eigen
+)
+
+target_compile_definitions(test_usb_camera PRIVATE
+    PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+)
+
+target_link_libraries(test_usb_camera
+    PRIVATE
+    io
+    tools
+    ${OpenCV_LIBS}
 )
