@@ -13,7 +13,7 @@
 namespace tools {
 
 inline constexpr const char* DEFAULT_LOGGER_CONFIG_PATH =
-    "tools/config/logger_config.toml";
+    "config/tools/logger_config.toml";
 
 /**
  * @brief Load LoggerConfig from a TOML file.

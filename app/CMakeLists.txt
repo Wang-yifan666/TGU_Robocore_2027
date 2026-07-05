@@ -2,6 +2,7 @@ add_library(app STATIC
     auto_aim/armor.cpp
     auto_aim/armor_config.cpp
     auto_aim/solver.cpp
+    auto_aim/auto_aim.cpp
 )
 
 target_include_directories(app PUBLIC

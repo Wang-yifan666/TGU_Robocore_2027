@@ -164,13 +164,30 @@ namespace tools
 			}
 		}
 
-		if(file_ && ofs_.is_open())
+		if(file_)
 		{
-			ofs_ << text << '\n';
-
-			if(flush_on_error_ && level >= LogLevel::Error)
+			if(ofs_.is_open())
 			{
-				ofs_.flush();
+				ofs_ << text << '\n';
+
+				if(flush_on_error_ && level >= LogLevel::Error)
+				{
+					ofs_.flush();
+				}
+
+				// 运行时检测文件流是否损坏（如磁盘满、目录被删除）
+				if(ofs_.bad())
+				{
+					std::cerr << "[LOGGER] log file stream has encountered an error, "
+					             "disabling file output\n";
+					file_ = false;
+				}
+			}
+			else
+			{
+				std::cerr << "[LOGGER] log file is unexpectedly closed, "
+				             "disabling file output\n";
+				file_ = false;
 			}
 		}
 	}

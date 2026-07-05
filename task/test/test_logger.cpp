@@ -49,7 +49,7 @@ int main() {
     std::string config_error;
 
     if (!tools::load_logger_config(
-            PROJECT_SOURCE_DIR "/tools/config/logger_config.toml",
+	    PROJECT_SOURCE_DIR "/config/tools/logger_config.toml",
             config,
             &config_error)) {
         std::cerr << "logger config load failed: "
