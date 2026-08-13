@@ -4,6 +4,8 @@
 
 tmp/
 build/
+.cline/
+data/models/
 
 *.txt
 *.log

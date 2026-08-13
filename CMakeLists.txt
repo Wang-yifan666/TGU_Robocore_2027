@@ -20,6 +20,8 @@ pkg_check_modules(ARAVIS REQUIRED aravis-0.8)
 
 find_package(Eigen3 REQUIRED)
 
+find_package(OpenVINO REQUIRED)
+
 include_directories(${PROJECT_SOURCE_DIR})
 include_directories(${ARAVIS_INCLUDE_DIRS})
 

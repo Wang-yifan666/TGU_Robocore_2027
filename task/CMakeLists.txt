@@ -9,6 +9,7 @@ add_executable(test_armor test/test_armor.cpp)
 add_executable(test_solver test/test_solver.cpp)
 add_executable(test_usb_camera test/test_usb_camera.cpp)
 add_executable(test_detector test/test_detector.cpp)
+add_executable(test_openvino_inference test/test_openvino_inference.cpp)
 
 target_compile_definitions(test_logger PRIVATE
     PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
@@ -60,6 +61,16 @@ target_link_libraries(test_armor PRIVATE
     tools
     ${OpenCV_LIBS}
     Eigen3::Eigen
+)
+
+target_compile_definitions(test_openvino_inference PRIVATE
+    PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+)
+
+target_link_libraries(test_openvino_inference PRIVATE
+    app
+    tools
+    ${OpenCV_LIBS}
 )
 
 target_link_libraries(test_solver PRIVATE

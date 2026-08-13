@@ -6,6 +6,7 @@ add_library(app STATIC
 
     auto_aim/detector/detector.cpp
     auto_aim/detector/detector_config.cpp
+    auto_aim/detector/openvino_inference.cpp
 )
 
 target_include_directories(app PUBLIC
@@ -20,4 +21,5 @@ target_link_libraries(app PUBLIC
     tools
     ${OpenCV_LIBS}
     Eigen3::Eigen
+    openvino::runtime
 )
