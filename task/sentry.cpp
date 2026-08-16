@@ -4,10 +4,11 @@
 
 #include <csignal>
 #include <chrono>
-#include <iostream>
-#include <thread>
-#include <string>
 #include <filesystem>
+#include <iostream>
+#include <string>
+#include <thread>
+#include <utility>
 
 #include <opencv2/core.hpp>
 
@@ -85,19 +86,21 @@ int main(int argc, char** argv)
 
 	RuntimeConfig runtime_config = load_runtime_config();
 
-	app::auto_aim::AutoAimConfig auto_aim_config;
-	auto_aim_config.enemy_color = app::auto_aim::ArmorColor::Blue;
-	auto_aim_config.enable_detector = false;
-	auto_aim_config.enable_solver = false;
-	auto_aim_config.enable_tracker = false;
-	auto_aim_config.enable_predictor = false;
-	auto_aim_config.enable_debug = true;
+	// 生产入口暂未装配真实 detector / solver 依赖。
+	// 禁止使用 demo-only solver 标定（config/app/auto_aim/solver_demo.toml）。
+	// 待生产 camera intrinsic / distortion / hand-eye calibration 到位后，
+	// 由 task 层加载配置并注入 Detector / Solver。
+	app::auto_aim::DetectorConfig detector_config;
+	app::auto_aim::Detector detector(detector_config, nullptr);
 
-	app::auto_aim::AutoAim auto_aim;
-	if(!auto_aim.init(auto_aim_config))
+	app::auto_aim::SolverConfig solver_config;
+	app::auto_aim::Solver solver(solver_config);
+
+	app::auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver));
+
+	if(!auto_aim.is_ready())
 	{
-		LOG_ERROR(MODULE, "failed to initialize auto aim");
-		return -1;
+		LOG_WARN(MODULE, "auto aim dependencies not ready: detector/solver not configured");
 	}
 
 	while(g_running)

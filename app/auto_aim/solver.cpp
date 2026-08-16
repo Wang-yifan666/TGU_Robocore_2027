@@ -136,8 +136,15 @@ namespace app::auto_aim
 		/*
         * OpenCV 相机坐标系中 z 轴指向镜头前方。
         * z <= 0 表示解在相机后方，应视为非法结果。
+        *
+        * 防御性校验：退化相机矩阵等输入可能导致 solvePnP 返回
+        * true 但 tvec 含有 NaN/Inf。这里显式拒绝非有限结果，
+        * 保证调用方拿到的 xyz / ypr / ypd 一定有限。
+        *
+        * 注意：此校验不改变任何坐标变换公式。
         */
-		if(tvec[2] <= 0.0)
+		if(!std::isfinite(tvec[0]) || !std::isfinite(tvec[1]) || !std::isfinite(tvec[2])
+		   || tvec[2] <= 0.0)
 		{
 			return false;
 		}

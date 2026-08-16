@@ -12,6 +12,9 @@ endif()
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# 保持手动运行，不进入默认快速测试集。
+enable_testing()
+
 find_package(Boost CONFIG REQUIRED)
 find_package(OpenCV REQUIRED)
 

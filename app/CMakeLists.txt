@@ -3,6 +3,7 @@ add_library(app STATIC
     auto_aim/armor_config.cpp
     auto_aim/auto_aim.cpp
     auto_aim/solver.cpp
+    auto_aim/solver_config.cpp
 
     auto_aim/detector/detector.cpp
     auto_aim/detector/detector_config.cpp

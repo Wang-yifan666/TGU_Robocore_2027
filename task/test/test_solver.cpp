@@ -353,6 +353,45 @@ namespace
 		              "set_r_gimbal_to_world with identity r_gimbal_to_imu_body");
 	}
 
+	/**
+	 * @brief 回归测试：锁定旧 sp_vision_25 Solver 的 r_gimbal_to_world 行为。
+	 *
+	 * 当前迁移代码保持旧行为：
+	 *   r_gimbal_to_world =
+	 *       r_gimbal_to_imu_body^T
+	 *       * r_imu_body_to_world
+	 *       * r_gimbal_to_imu_body
+	 *
+	 * 该公式的物理语义是否合理，属于独立的坐标系审计阶段；
+	 * 本测试只用于防止迁移过程中"顺手修正"而改变旧行为。
+	 */
+	void test_solver_gimbal_to_world_regression(TestRunner& runner)
+	{
+		aa::SolverConfig config = make_valid_solver_config();
+
+		// 非单位阵的 gimbal -> imu_body 旋转。
+		config.r_gimbal_to_imu_body =
+		    Eigen::AngleAxisd(kPi / 3.0, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+
+		aa::Solver solver(config);
+
+		// 非单位四元数：绕 X 旋转 40°。
+		const Eigen::Quaterniond q_imu_body_to_world(
+		    Eigen::AngleAxisd(40.0 * kPi / 180.0, Eigen::Vector3d::UnitX()));
+
+		solver.set_r_gimbal_to_world(q_imu_body_to_world);
+
+		const Eigen::Matrix3d r_imu_body_to_world =
+		    q_imu_body_to_world.normalized().toRotationMatrix();
+
+		const Eigen::Matrix3d expected = config.r_gimbal_to_imu_body.transpose()
+		    * r_imu_body_to_world * config.r_gimbal_to_imu_body;
+
+		runner.expect(
+		    mat_near(solver.r_gimbal_to_world(), expected, 1e-8),
+		    "non-identity r_gimbal_to_imu_body: current formula R^T * R_imu2world * R");
+	}
+
 } // namespace
 
 int main()
@@ -365,6 +404,7 @@ int main()
 	test_solver_config_validation(runner);
 	test_solver_pnp_closed_loop(runner);
 	test_solver_gimbal_to_world_rotation(runner);
+	test_solver_gimbal_to_world_regression(runner);
 
 	return runner.result();
 }

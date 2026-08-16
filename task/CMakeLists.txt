@@ -1,4 +1,9 @@
 # test
+add_test(NAME test_solver COMMAND test_solver)
+add_test(NAME test_detector COMMAND test_detector)
+add_test(NAME test_openvino_inference COMMAND test_openvino_inference)
+add_test(NAME test_auto_aim COMMAND test_auto_aim)
+
 add_executable(sentry sentry.cpp)
 add_executable(read_toml test/read_toml.cpp)
 add_executable(test_serial test/test_serial.cpp)
@@ -10,6 +15,8 @@ add_executable(test_solver test/test_solver.cpp)
 add_executable(test_usb_camera test/test_usb_camera.cpp)
 add_executable(test_detector test/test_detector.cpp)
 add_executable(test_openvino_inference test/test_openvino_inference.cpp)
+add_executable(test_auto_aim test/test_auto_aim.cpp)
+add_executable(test_auto_aim_pipeline test/test_auto_aim_pipeline.cpp)
 
 target_compile_definitions(test_logger PRIVATE
     PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
@@ -71,6 +78,28 @@ target_link_libraries(test_openvino_inference PRIVATE
     app
     tools
     ${OpenCV_LIBS}
+)
+
+target_include_directories(test_auto_aim PRIVATE
+    ${PROJECT_SOURCE_DIR}
+)
+
+target_link_libraries(test_auto_aim PRIVATE
+    app
+    tools
+    ${OpenCV_LIBS}
+    Eigen3::Eigen
+)
+
+target_compile_definitions(test_auto_aim_pipeline PRIVATE
+    PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+)
+
+target_link_libraries(test_auto_aim_pipeline PRIVATE
+    app
+    tools
+    ${OpenCV_LIBS}
+    Eigen3::Eigen
 )
 
 target_link_libraries(test_solver PRIVATE
