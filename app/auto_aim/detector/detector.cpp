@@ -18,7 +18,6 @@ namespace app::auto_aim
 
 	namespace
 	{
-
 		constexpr std::string_view kLogModule = "DETECTOR";
 
 		using Clock = std::chrono::steady_clock;
