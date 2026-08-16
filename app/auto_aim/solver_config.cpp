@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include <Eigen/Core>
+#include <opencv2/core.hpp>
 
 #include "tools/logger.hpp"
 #include "tools/tomlpp.hpp"
@@ -25,35 +27,59 @@ namespace app::auto_aim
 			return std::isfinite(value);
 		}
 
-		bool is_finite_vector(const std::vector<double>& values)
+		/**
+		 * @brief 读取 toml 数组为 double 向量。
+		 *
+		 * 非 numeric 元素（例如字符串）返回 std::nullopt，
+		 * 不允许静默 fallback 到 0。
+		 */
+		std::optional<std::vector<double>> read_double_array(const toml::array* array)
 		{
-			return values.size() == 3 && std::all_of(values.begin(), values.end(), is_finite);
-		}
+			if(array == nullptr)
+			{
+				return std::nullopt;
+			}
 
-		bool is_finite_matrix3(const std::vector<double>& values)
-		{
-			return values.size() == 9 && std::all_of(values.begin(), values.end(), is_finite);
+			std::vector<double> values;
+			values.reserve(array->size());
+
+			for(const auto& element: *array)
+			{
+				const auto value = element.value<double>();
+				if(!value)
+				{
+					return std::nullopt;
+				}
+
+				values.push_back(*value);
+			}
+
+			return values;
 		}
 
 		bool load_camera_matrix(const toml::table& camera_table, SolverConfig& config)
 		{
-			const auto* camera_matrix_array = camera_table["camera_matrix"].as_array();
-			if(camera_matrix_array == nullptr)
+			const auto values =
+			    read_double_array(camera_table["camera_matrix"].as_array());
+
+			if(!values)
 			{
-				LOG_ERROR(kLogModule, "missing [camera].camera_matrix");
+				LOG_ERROR(kLogModule, "camera_matrix must be an array of numeric values");
 				return false;
 			}
 
-			std::vector<double> values;
-			values.reserve(camera_matrix_array->size());
-			for(const auto& element: *camera_matrix_array)
-			{
-				values.push_back(element.value_or(0.0));
-			}
-
-			if(!is_finite_matrix3(values))
+			if(values->size() != 9 || !std::all_of(values->begin(), values->end(), is_finite))
 			{
 				LOG_ERROR(kLogModule, "camera_matrix must contain exactly 9 finite values");
+				return false;
+			}
+
+			const double fx = (*values)[0];
+			const double fy = (*values)[4];
+
+			if(fx <= 0.0 || fy <= 0.0)
+			{
+				LOG_ERROR(kLogModule, "camera_matrix fx (index 0) and fy (index 4) must be > 0");
 				return false;
 			}
 
@@ -62,7 +88,7 @@ namespace app::auto_aim
 			{
 				for(int col = 0; col < 3; ++col)
 				{
-					camera_matrix.at<double>(row, col) = values[row * 3 + col];
+					camera_matrix.at<double>(row, col) = (*values)[row * 3 + col];
 				}
 			}
 
@@ -72,30 +98,25 @@ namespace app::auto_aim
 
 		bool load_distort_coeffs(const toml::table& camera_table, SolverConfig& config)
 		{
-			const auto* distort_array = camera_table["distort_coeffs"].as_array();
-			if(distort_array == nullptr)
+			const auto values =
+			    read_double_array(camera_table["distort_coeffs"].as_array());
+
+			if(!values)
 			{
-				LOG_ERROR(kLogModule, "missing [camera].distort_coeffs");
+				LOG_ERROR(kLogModule, "distort_coeffs must be an array of numeric values");
 				return false;
 			}
 
-			std::vector<double> values;
-			values.reserve(distort_array->size());
-			for(const auto& element: *distort_array)
-			{
-				values.push_back(element.value_or(0.0));
-			}
-
-			if(values.empty() || !std::all_of(values.begin(), values.end(), is_finite))
+			if(values->empty() || !std::all_of(values->begin(), values->end(), is_finite))
 			{
 				LOG_ERROR(kLogModule, "distort_coeffs must contain finite values");
 				return false;
 			}
 
-			cv::Mat distort_coeffs(1, static_cast<int>(values.size()), CV_64F);
-			for(std::size_t i = 0; i < values.size(); ++i)
+			cv::Mat distort_coeffs(1, static_cast<int>(values->size()), CV_64F);
+			for(std::size_t i = 0; i < values->size(); ++i)
 			{
-				distort_coeffs.at<double>(0, static_cast<int>(i)) = values[i];
+				distort_coeffs.at<double>(0, static_cast<int>(i)) = (*values)[i];
 			}
 
 			config.distort_coeffs = distort_coeffs;
@@ -105,21 +126,15 @@ namespace app::auto_aim
 		bool load_rotation3(const toml::table& extrinsic_table, const char* key,
 		                    Eigen::Matrix3d& rotation)
 		{
-			const auto* array = extrinsic_table[key].as_array();
-			if(array == nullptr)
+			const auto values = read_double_array(extrinsic_table[key].as_array());
+
+			if(!values)
 			{
-				LOG_ERROR(kLogModule, "missing [extrinsic].{}", key);
+				LOG_ERROR(kLogModule, "{} must be an array of numeric values", key);
 				return false;
 			}
 
-			std::vector<double> values;
-			values.reserve(array->size());
-			for(const auto& element: *array)
-			{
-				values.push_back(element.value_or(0.0));
-			}
-
-			if(!is_finite_matrix3(values))
+			if(values->size() != 9 || !std::all_of(values->begin(), values->end(), is_finite))
 			{
 				LOG_ERROR(kLogModule, "{} must contain exactly 9 finite values", key);
 				return false;
@@ -129,7 +144,7 @@ namespace app::auto_aim
 			{
 				for(int col = 0; col < 3; ++col)
 				{
-					rotation(row, col) = values[row * 3 + col];
+					rotation(row, col) = (*values)[row * 3 + col];
 				}
 			}
 
@@ -139,31 +154,78 @@ namespace app::auto_aim
 		bool load_translation3(const toml::table& extrinsic_table, const char* key,
 		                       Eigen::Vector3d& translation)
 		{
-			const auto* array = extrinsic_table[key].as_array();
-			if(array == nullptr)
+			const auto values = read_double_array(extrinsic_table[key].as_array());
+
+			if(!values)
 			{
-				LOG_ERROR(kLogModule, "missing [extrinsic].{}", key);
+				LOG_ERROR(kLogModule, "{} must be an array of numeric values", key);
 				return false;
 			}
 
-			std::vector<double> values;
-			values.reserve(array->size());
-			for(const auto& element: *array)
-			{
-				values.push_back(element.value_or(0.0));
-			}
-
-			if(!is_finite_vector(values))
+			if(values->size() != 3 || !std::all_of(values->begin(), values->end(), is_finite))
 			{
 				LOG_ERROR(kLogModule, "{} must contain exactly 3 finite values", key);
 				return false;
 			}
 
-			translation = Eigen::Vector3d(values[0], values[1], values[2]);
+			translation = Eigen::Vector3d((*values)[0], (*values)[1], (*values)[2]);
 			return true;
 		}
 
 	} // namespace
+
+	bool load_solver_config_from_table(const toml::table& root, SolverConfig& config)
+	{
+		const auto* camera_table = root["camera"].as_table();
+		if(camera_table == nullptr)
+		{
+			LOG_ERROR(kLogModule, "missing [camera] table");
+			return false;
+		}
+
+		const auto* extrinsic_table = root["extrinsic"].as_table();
+		if(extrinsic_table == nullptr)
+		{
+			LOG_ERROR(kLogModule, "missing [extrinsic] table");
+			return false;
+		}
+
+		SolverConfig loaded_config;
+
+		if(!load_camera_matrix(*camera_table, loaded_config))
+		{
+			return false;
+		}
+
+		if(!load_distort_coeffs(*camera_table, loaded_config))
+		{
+			return false;
+		}
+
+		if(!load_rotation3(*extrinsic_table, "r_camera_to_gimbal",
+		                   loaded_config.r_camera_to_gimbal))
+		{
+			return false;
+		}
+
+		if(!load_translation3(*extrinsic_table, "t_camera_to_gimbal",
+		                      loaded_config.t_camera_to_gimbal))
+		{
+			return false;
+		}
+
+		if(!load_rotation3(*extrinsic_table, "r_gimbal_to_imu_body",
+		                   loaded_config.r_gimbal_to_imu_body))
+		{
+			return false;
+		}
+
+		// armor 尺寸不在 TOML 加载，保留 SolverConfig 默认值。
+
+		config = std::move(loaded_config);
+
+		return true;
+	}
 
 	bool load_solver_config(const std::string& config_path, SolverConfig& config)
 	{
@@ -171,53 +233,11 @@ namespace app::auto_aim
 		{
 			const toml::table root = toml::parse_file(config_path);
 
-			const auto* camera_table = root["camera"].as_table();
-			if(camera_table == nullptr)
+			if(!load_solver_config_from_table(root, config))
 			{
-				LOG_ERROR(kLogModule, "missing [camera] table in {}", config_path);
+				LOG_ERROR(kLogModule, "solver configuration validation failed: {}", config_path);
 				return false;
 			}
-
-			const auto* extrinsic_table = root["extrinsic"].as_table();
-			if(extrinsic_table == nullptr)
-			{
-				LOG_ERROR(kLogModule, "missing [extrinsic] table in {}", config_path);
-				return false;
-			}
-
-			SolverConfig loaded_config;
-
-			if(!load_camera_matrix(*camera_table, loaded_config))
-			{
-				return false;
-			}
-
-			if(!load_distort_coeffs(*camera_table, loaded_config))
-			{
-				return false;
-			}
-
-			if(!load_rotation3(*extrinsic_table, "r_camera_to_gimbal",
-			                   loaded_config.r_camera_to_gimbal))
-			{
-				return false;
-			}
-
-			if(!load_translation3(*extrinsic_table, "t_camera_to_gimbal",
-			                      loaded_config.t_camera_to_gimbal))
-			{
-				return false;
-			}
-
-			if(!load_rotation3(*extrinsic_table, "r_gimbal_to_imu_body",
-			                   loaded_config.r_gimbal_to_imu_body))
-			{
-				return false;
-			}
-
-			// armor 尺寸不在 TOML 加载，保留 SolverConfig 默认值。
-
-			config = std::move(loaded_config);
 
 			LOG_INFO(kLogModule, "loaded solver config: {}", config_path);
 

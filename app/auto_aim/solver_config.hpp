@@ -14,21 +14,30 @@
 #include <string>
 
 #include "app/auto_aim/solver.hpp"
+#include "tools/tomlpp.hpp"
 
 namespace app::auto_aim
 {
 
 	/**
-	 * @brief 从 TOML 加载 SolverConfig。
-	 * @param config_path TOML 文件路径。
+	 * @brief 从已解析的 toml::table 加载 SolverConfig（纯逻辑，便于单测）。
+	 * @param root 已解析的 TOML 根表。
 	 * @param config 输出配置。
-	 * @return true 加载并校验成功；false 解析失败、字段缺失或数值非法。
+	 * @return true 加载并校验成功；false 字段缺失或数值非法。
 	 *
 	 * 配置约定：
 	 * - 矩阵按行主序（row-major）填写，共 9 个元素；
 	 * - 平移向量按 [tx, ty, tz]；
 	 * - 长度单位统一为 m；
 	 * - armor 尺寸（lightbar_length_m 等）不在此加载，保留 SolverConfig 默认值。
+	 */
+	bool load_solver_config_from_table(const toml::table& root, SolverConfig& config);
+
+	/**
+	 * @brief 从 TOML 文件加载 SolverConfig。
+	 * @param config_path TOML 文件路径。
+	 * @param config 输出配置。
+	 * @return true 加载并校验成功；false 解析失败、字段缺失或数值非法。
 	 */
 	bool load_solver_config(const std::string& config_path, SolverConfig& config);
 

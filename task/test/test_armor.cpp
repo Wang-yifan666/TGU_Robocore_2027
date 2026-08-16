@@ -122,7 +122,7 @@ namespace
 
 // ==================== 测试函数 ====================
 
-void TestLightbar()
+bool TestLightbar()
 {
 	printf("===== Test Lightbar =====\n");
 
@@ -142,9 +142,16 @@ void TestLightbar()
 	bool pass = (std::abs(lb.length - LB_SIZE_H) < 1e-3 && std::abs(lb.width - LB_SIZE_W) < 1e-3
 	             && std::abs(lb.angle - CV_PI / 2.0) < 1e-3);
 	printf("[%s] Lightbar geometry test\n\n", pass ? "PASS" : "FAIL");
+
+	if(!pass)
+	{
+		printf("  <-- FAILURE: Lightbar geometry\n");
+	}
+
+	return pass;
 }
 
-void TestArmorFromLightbars()
+bool TestArmorFromLightbars()
 {
 	printf("===== Test Armor from Lightbars =====\n");
 
@@ -168,9 +175,16 @@ void TestArmorFromLightbars()
 	             && std::abs(armor.ratio - ARMOR_LR_GAP / LB_SIZE_H) < 1e-3
 	             && std::abs(armor.side_ratio - 1.0) < 1e-3);
 	printf("[%s] Armor from Lightbars test\n\n", pass ? "PASS" : "FAIL");
+
+	if(!pass)
+	{
+		printf("  <-- FAILURE: Armor from Lightbars\n");
+	}
+
+	return pass;
 }
 
-void TestArmorFromClassId()
+bool TestArmorFromClassId()
 {
 	printf("===== Test Armor from class_id =====\n");
 
@@ -188,9 +202,16 @@ void TestArmorFromClassId()
 	             && armor.type == app::auto_aim::ArmorType::Small
 	             && cv::norm(armor.center - EXPECT_CENTER_CLASS) < 1e-3);
 	printf("[%s] Armor from class_id test\n\n", pass ? "PASS" : "FAIL");
+
+	if(!pass)
+	{
+		printf("  <-- FAILURE: Armor from class_id\n");
+	}
+
+	return pass;
 }
 
-void TestArmorFromClassIdWithOffset()
+bool TestArmorFromClassIdWithOffset()
 {
 	printf("===== Test Armor from class_id with offset =====\n");
 
@@ -205,9 +226,16 @@ void TestArmorFromClassIdWithOffset()
 	             && armor.type == app::auto_aim::ArmorType::Big
 	             && cv::norm(armor.center - EXPECT_CENTER_OFFSET) < 1e-3);
 	printf("[%s] Armor from class_id with offset test\n\n", pass ? "PASS" : "FAIL");
+
+	if(!pass)
+	{
+		printf("  <-- FAILURE: Armor from class_id with offset\n");
+	}
+
+	return pass;
 }
 
-void TestArmorFromYoloId()
+bool TestArmorFromYoloId()
 {
 	printf("===== Test Armor from Yolo id =====\n");
 
@@ -229,9 +257,16 @@ void TestArmorFromYoloId()
 	pass = pass && armor2.color == app::auto_aim::ArmorColor::Red
 	    && armor2.name == app::auto_aim::ArmorName::One;
 	printf("[%s] Armor from Yolo id test\n\n", pass ? "PASS" : "FAIL");
+
+	if(!pass)
+	{
+		printf("  <-- FAILURE: Armor from Yolo id\n");
+	}
+
+	return pass;
 }
 
-void TestInvalidClassId()
+bool TestInvalidClassId()
 {
 	printf("===== Test Invalid class_id =====\n");
 
@@ -246,9 +281,16 @@ void TestInvalidClassId()
 	             && armor.name == app::auto_aim::ArmorName::NotArmor
 	             && armor.type == app::auto_aim::ArmorType::Unknown);
 	printf("[%s] Invalid class_id test\n\n", pass ? "PASS" : "FAIL");
+
+	if(!pass)
+	{
+		printf("  <-- FAILURE: Invalid class_id\n");
+	}
+
+	return pass;
 }
 
-void TestInvalidKeypoints()
+bool TestInvalidKeypoints()
 {
 	printf("===== Test Invalid Keypoints (size < 4) =====\n");
 
@@ -262,6 +304,13 @@ void TestInvalidKeypoints()
 	printf("name: %d (expected not_armor=255)\n", static_cast<int>(armor.name));
 	printf("type: %d (expected unknown=2)\n", static_cast<int>(armor.type));
 	printf("[%s] Invalid keypoints test\n\n", pass ? "PASS" : "FAIL");
+
+	if(!pass)
+	{
+		printf("  <-- FAILURE: Invalid keypoints\n");
+	}
+
+	return pass;
 }
 
 int main()
@@ -270,14 +319,17 @@ int main()
 
 	printf("=== Armor Module Test Suite ===\n\n");
 
-	TestLightbar();
-	TestArmorFromLightbars();
-	TestArmorFromClassId();
-	TestArmorFromClassIdWithOffset();
-	TestArmorFromYoloId();
-	TestInvalidClassId();
-	TestInvalidKeypoints();
+	int failures = 0;
 
-	printf("=== All tests completed ===\n");
-	return 0;
+	failures += TestLightbar() ? 0 : 1;
+	failures += TestArmorFromLightbars() ? 0 : 1;
+	failures += TestArmorFromClassId() ? 0 : 1;
+	failures += TestArmorFromClassIdWithOffset() ? 0 : 1;
+	failures += TestArmorFromYoloId() ? 0 : 1;
+	failures += TestInvalidClassId() ? 0 : 1;
+	failures += TestInvalidKeypoints() ? 0 : 1;
+
+	printf("=== All tests completed (failures=%d) ===\n", failures);
+
+	return failures == 0 ? 0 : 1;
 }

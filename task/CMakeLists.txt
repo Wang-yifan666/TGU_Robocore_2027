@@ -1,8 +1,12 @@
 # test
+# 分组注册 CTest：快速、稳定、无硬件/真实视频依赖的单元测试。
+# test_auto_aim_pipeline（真实 OpenVINO + demo.avi）保持手动运行，不注册。
 add_test(NAME test_solver COMMAND test_solver)
 add_test(NAME test_detector COMMAND test_detector)
 add_test(NAME test_openvino_inference COMMAND test_openvino_inference)
 add_test(NAME test_auto_aim COMMAND test_auto_aim)
+add_test(NAME test_armor COMMAND test_armor)
+add_test(NAME test_solver_config COMMAND test_solver_config)
 
 add_executable(sentry sentry.cpp)
 add_executable(read_toml test/read_toml.cpp)
@@ -17,6 +21,7 @@ add_executable(test_detector test/test_detector.cpp)
 add_executable(test_openvino_inference test/test_openvino_inference.cpp)
 add_executable(test_auto_aim test/test_auto_aim.cpp)
 add_executable(test_auto_aim_pipeline test/test_auto_aim_pipeline.cpp)
+add_executable(test_solver_config test/test_solver_config.cpp)
 
 target_compile_definitions(test_logger PRIVATE
     PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
@@ -96,6 +101,17 @@ target_compile_definitions(test_auto_aim_pipeline PRIVATE
 )
 
 target_link_libraries(test_auto_aim_pipeline PRIVATE
+    app
+    tools
+    ${OpenCV_LIBS}
+    Eigen3::Eigen
+)
+
+target_include_directories(test_solver_config PRIVATE
+    ${PROJECT_SOURCE_DIR}
+)
+
+target_link_libraries(test_solver_config PRIVATE
     app
     tools
     ${OpenCV_LIBS}

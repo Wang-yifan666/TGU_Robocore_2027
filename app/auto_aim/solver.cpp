@@ -15,7 +15,71 @@ namespace app::auto_aim
 	{
 		bool check_camera_matrix(const cv::Mat& camera_matrix)
 		{
-			return !camera_matrix.empty() && camera_matrix.rows == 3 && camera_matrix.cols == 3;
+			if(camera_matrix.empty() || camera_matrix.rows != 3 || camera_matrix.cols != 3)
+			{
+				return false;
+			}
+
+			// 要求 3x3 且全部 finite；fx (>0,0) 与 fy (>1,1) 必须为正。
+			double fx = 0.0;
+			double fy = 0.0;
+
+			for(int row = 0; row < 3; ++row)
+			{
+				for(int col = 0; col < 3; ++col)
+				{
+					const double value = camera_matrix.at<double>(row, col);
+
+					if(!std::isfinite(value))
+					{
+						return false;
+					}
+
+					if(row == 0 && col == 0)
+					{
+						fx = value;
+					}
+
+					if(row == 1 && col == 1)
+					{
+						fy = value;
+					}
+				}
+			}
+
+			return fx > 0.0 && fy > 0.0;
+		}
+
+		bool is_finite_double(double value)
+		{
+			return std::isfinite(value);
+		}
+
+		bool check_finite_matrix3(const Eigen::Matrix3d& rotation)
+		{
+			for(int row = 0; row < 3; ++row)
+			{
+				for(int col = 0; col < 3; ++col)
+				{
+					if(!is_finite_double(rotation(row, col)))
+					{
+						return false;
+					}
+				}
+			}
+
+			return true;
+		}
+
+		bool check_finite_vector3(const Eigen::Vector3d& translation)
+		{
+			return is_finite_double(translation.x()) && is_finite_double(translation.y())
+			    && is_finite_double(translation.z());
+		}
+
+		bool check_positive_dimension(double value)
+		{
+			return is_finite_double(value) && value > 0.0;
 		}
 
 		Eigen::Matrix3d cv_rotation_to_eigen(const cv::Mat& rotation)
@@ -39,20 +103,20 @@ namespace app::auto_aim
 	config_(config), camera_matrix_(config.camera_matrix.clone()),
 	distort_coeffs_(config.distort_coeffs.clone())
 	{
-		valid_ = check_camera_matrix(camera_matrix_) && config_.lightbar_length_m > 0.0
-		    && config_.small_armor_width_m > 0.0 && config_.big_armor_width_m > 0.0;
-
-		if(!valid_)
-		{
-			return;
-		}
-
+		// 先统一为 CV_64F，保证后续有限性检查读取的是标准 double。
 		camera_matrix_.convertTo(camera_matrix_, CV_64F);
 
 		if(!distort_coeffs_.empty())
 		{
 			distort_coeffs_.convertTo(distort_coeffs_, CV_64F);
 		}
+
+		valid_ = check_camera_matrix(camera_matrix_) && check_finite_matrix3(config_.r_gimbal_to_imu_body)
+		    && check_finite_matrix3(config_.r_camera_to_gimbal)
+		    && check_finite_vector3(config_.t_camera_to_gimbal)
+		    && check_positive_dimension(config_.lightbar_length_m)
+		    && check_positive_dimension(config_.small_armor_width_m)
+		    && check_positive_dimension(config_.big_armor_width_m);
 	}
 
 	bool Solver::is_valid() const noexcept

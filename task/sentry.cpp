@@ -98,9 +98,11 @@ int main(int argc, char** argv)
 
 	app::auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver));
 
+	// 依赖未就绪时直接退出，避免每 10ms 空转刷 ERROR。
 	if(!auto_aim.is_ready())
 	{
-		LOG_WARN(MODULE, "auto aim dependencies not ready: detector/solver not configured");
+		LOG_ERROR(MODULE, "auto aim dependencies not ready: detector/solver not configured");
+		return -1;
 	}
 
 	while(g_running)
@@ -122,8 +124,12 @@ int main(int argc, char** argv)
 
 		if(result.has_target)
 		{
-			LOG_INFO(MODULE, "target locked, yaw={:.3f}, pitch={:.3f}, distance={:.3f}", result.yaw,
-			         result.pitch, result.distance);
+			// pre-tracker 阶段：仅输出 raw geometric observation，
+			// 不把 yaw/pitch 当作最终云台控制命令。
+			LOG_INFO(MODULE, "target detected/solved, xyz_in_gimbal=({:.3f}, {:.3f}, {:.3f}) m, "
+			                 "distance={:.3f} m",
+			         result.target.xyz_in_gimbal.x(), result.target.xyz_in_gimbal.y(),
+			         result.target.xyz_in_gimbal.z(), result.distance);
 
 			// TODO: 串口发送给下位机
 		}

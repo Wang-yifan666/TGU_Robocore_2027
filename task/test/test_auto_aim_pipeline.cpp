@@ -17,6 +17,11 @@
  * - 否则 fallback 到 Eigen::Quaterniond::Identity()，并输出警告：
  *     "No synchronized demo quaternion data found. World-frame results are not validated."
  *
+ * 同步语义：
+ * - 视频帧数 > quaternion 行数时，在同步数据耗尽处停止处理并报告 sync truncated，
+ *   不复用最后一个 quaternion、不回退 identity。
+ * - timestamp 存在大断点仅做诊断（timestamp_gap_count / max_timestamp_gap），不修复。
+ *
  * 注意：本测试不验证真实 world 坐标，也不做"每帧必须检测到目标"的断言。
  */
 
@@ -25,6 +30,7 @@
 #include "app/auto_aim/detector/openvino_inference.hpp"
 #include "app/auto_aim/solver_config.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -44,12 +50,15 @@ namespace
 
 	constexpr const char* MODULE = "AUTO_AIM_PIPELINE";
 
+	// 相邻 quaternion timestamp 差值超过该值时计为一次 gap（单位 s）。
+	constexpr double kTimestampGapThresholdS = 0.5;
+
 	struct PipelineStats
 	{
 		std::size_t processed_frames = 0;
-		std::size_t detected_frames = 0;   // has_target == true
-		std::size_t no_target_frames = 0;  // NoTarget
-		std::size_t error_frames = 0;      // Error / NoFrame（异常路径）
+		std::size_t solved_target_frames = 0;  // has_target == true（成功 PnP）
+		std::size_t no_target_frames = 0;      // NoTarget
+		std::size_t error_frames = 0;          // Error / NoFrame（异常路径）
 	};
 
 	bool is_finite_point(const cv::Point2f& point)
@@ -57,16 +66,16 @@ namespace
 		return std::isfinite(point.x) && std::isfinite(point.y);
 	}
 
+	// pre-tracker 阶段合法 process() 输出状态仅：
+	// NoFrame / NoTarget / Detecting / Error。
+	// Idle / Tracking / TargetLocked 一律视为非法。
 	bool is_valid_state(app::auto_aim::AimState state)
 	{
 		switch(state)
 		{
-		case app::auto_aim::AimState::Idle:
 		case app::auto_aim::AimState::NoFrame:
 		case app::auto_aim::AimState::NoTarget:
 		case app::auto_aim::AimState::Detecting:
-		case app::auto_aim::AimState::Tracking:
-		case app::auto_aim::AimState::TargetLocked:
 		case app::auto_aim::AimState::Error:
 			return true;
 		default:
@@ -93,6 +102,23 @@ namespace
 
 		while(file >> timestamp >> w >> x >> y >> z)
 		{
+			// normalize 前检查 finite 且 norm > epsilon。
+			if(!std::isfinite(timestamp) || !std::isfinite(w) || !std::isfinite(x)
+			   || !std::isfinite(y) || !std::isfinite(z))
+			{
+				std::printf("[%s] [WARN] non-finite quaternion fields at line %zu\n", MODULE,
+				            count + 1);
+				return false;
+			}
+
+			const double norm_squared = w * w + x * x + y * y + z * z;
+
+			if(norm_squared <= 1e-12)
+			{
+				std::printf("[%s] [WARN] zero-norm quaternion at line %zu\n", MODULE, count + 1);
+				return false;
+			}
+
 			Eigen::Quaterniond q(w, x, y, z);
 			q.normalize();
 			out.emplace_back(timestamp, q);
@@ -193,9 +219,14 @@ int main()
 	}
 
 	// ============================================================
-	// 5. 逐帧处理直到 EOF
+	// 5. 逐帧处理；同步数据耗尽即停止
 	// ============================================================
 	PipelineStats stats;
+
+	bool sync_truncated = false;
+
+	std::size_t timestamp_gap_count = 0;
+	double max_timestamp_gap = 0.0;
 
 	cv::Mat frame;
 	std::size_t frame_index = 0;
@@ -215,19 +246,44 @@ int main()
 
 		app::auto_aim::FrameContext context;
 		context.image = frame;
-		context.timestamp_s = static_cast<double>(frame_index) / fps;
 
 		if(has_sync_quaternions)
 		{
 			if(frame_index >= quaternions.size())
 			{
-				std::printf("[%s] [WARN] video frame %zu exceeds quaternion data size %zu; "
-				            "synchronization mismatch detected\n",
+				// 同步数据提前耗尽：停止处理未同步的视频尾部，
+				// 不复用最后一个 quaternion、不回退 identity。
+				sync_truncated = true;
+				std::printf("[%s] [WARN] sync truncated at frame %zu (quaternion lines=%zu); "
+				            "synchronization mismatch detected, stopping video tail\n",
 				            MODULE, frame_index, quaternions.size());
 				break;
 			}
 
+			const double timestamp = std::get<0>(quaternions[frame_index]);
+			context.timestamp_s = timestamp;
 			context.q_imu_body_to_world = std::get<1>(quaternions[frame_index]);
+
+			// timestamp gap 诊断（只 WARN，不修复/插值）。
+			if(frame_index > 0)
+			{
+				const double prev_timestamp = std::get<0>(quaternions[frame_index - 1]);
+				const double gap = timestamp - prev_timestamp;
+
+				if(gap > 0.0)
+				{
+					max_timestamp_gap = std::max(max_timestamp_gap, gap);
+
+					if(gap > kTimestampGapThresholdS)
+					{
+						++timestamp_gap_count;
+					}
+				}
+			}
+		}
+		else
+		{
+			context.timestamp_s = static_cast<double>(frame_index) / fps;
 		}
 		// 无同步数据时保持 Identity（上面已输出警告）。
 
@@ -248,7 +304,7 @@ int main()
 		}
 		else if(result.state == app::auto_aim::AimState::Detecting && result.has_target)
 		{
-			++stats.detected_frames;
+			++stats.solved_target_frames;
 
 			// 弱断言：成功结果必须是有限且有正距离。
 			if(!std::isfinite(result.distance) || result.distance <= 0.0)
@@ -277,7 +333,7 @@ int main()
 				}
 			}
 
-			// 统计输出（每帧记录，见下方汇总；此处保留最近一帧详情供调试）。
+			// 采样输出（每 60 帧 + 首帧），便于人工核查。
 			if(frame_index % 60 == 0 || frame_index == 0)
 			{
 				std::printf(
@@ -317,12 +373,16 @@ int main()
 	// 6. 汇总与弱断言
 	// ============================================================
 	std::printf("\n================= Pipeline Summary =================\n");
-	std::printf("video:           %s\n", video_path.c_str());
-	std::printf("processed_frames:%zu\n", stats.processed_frames);
-	std::printf("detected_frames: %zu\n", stats.detected_frames);
-	std::printf("no_target_frames:%zu\n", stats.no_target_frames);
-	std::printf("error_frames:    %zu\n", stats.error_frames);
-	std::printf("sync_quaternion: %s\n", has_sync_quaternions ? "yes" : "no (identity fallback)");
+	std::printf("video:                 %s\n", video_path.c_str());
+	std::printf("processed_frames:      %zu\n", stats.processed_frames);
+	std::printf("solved_target_frames:  %zu\n", stats.solved_target_frames);
+	std::printf("no_target_frames:      %zu\n", stats.no_target_frames);
+	std::printf("error_frames:          %zu\n", stats.error_frames);
+	std::printf("sync_quaternion:       %s\n",
+	            has_sync_quaternions ? "yes" : "no (identity fallback)");
+	std::printf("sync_truncated:        %s\n", sync_truncated ? "yes" : "no");
+	std::printf("timestamp_gap_count:   %zu\n", timestamp_gap_count);
+	std::printf("max_timestamp_gap:     %.6f s\n", max_timestamp_gap);
 	std::printf("===================================================\n");
 
 	if(stats.processed_frames == 0)

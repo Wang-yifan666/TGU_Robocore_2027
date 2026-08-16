@@ -20,22 +20,34 @@ namespace app::auto_aim
 		constexpr std::string_view kLogModule = "AUTO_AIM";
 
 		/**
-		 * @brief pre-tracker 确定性目标选择（临时策略）。
+		 * @brief pre-tracker 确定性候选排序（临时策略）。
 		 *
-		 * 复现旧 sp_vision_25 Tracker 在 lost 状态初始化目标时的排序行为：
+		 * 对完整候选 index 按同一个 comparator 整体 stable_sort，
+		 * 之后所有 fallback 候选严格按该顺序尝试 PnP。
+		 *
+		 * 排序关键字：
 		 *   第一关键字：ArmorPriority，数字越小优先级越高；
 		 *   第二关键字：距离图像中心越近越优先。
+		 *
+		 * 已知限制（重要）：当前 YOLO Detector 输出的 Armor.priority
+		 * 全部为 ArmorPriority::Unknown，尚未实现 priority 来源。
+		 * 因此当前实际 fallback 等价于 image-center ordering。
+		 * 本阶段不得自行发明 priority mapping；
+		 * sp_vision_25 的 priority 来源在后续 Tracker Plan 中单独追踪。
 		 *
 		 * 注意：这是 pre-tracker 阶段的临时策略，
 		 *       未来会由真正的 Tracker / target association 替换。
 		 *
 		 * @param armors 候选装甲板（Detector 已按敌人颜色/置信度/几何过滤）。
 		 * @param image_center 当前输入图像中心，禁止硬编码。
-		 * @return 最优候选的迭代器；armors 为空时返回 end()。
+		 * @return 已按 comparator 排好序的候选 index；armors 为空时返回空 vector。
 		 */
-		std::vector<Armor>::const_iterator select_pre_tracker_target(
-		    const std::vector<Armor>& armors, const cv::Point2f& image_center)
+		std::vector<std::size_t> order_candidates(const std::vector<Armor>& armors,
+		                                          const cv::Point2f& image_center)
 		{
+			std::vector<std::size_t> order(armors.size());
+			std::iota(order.begin(), order.end(), std::size_t{0});
+
 			const auto priority_value = [](ArmorPriority priority) -> int {
 				switch(priority)
 				{
@@ -62,18 +74,22 @@ namespace app::auto_aim
 				return std::sqrt(dx * dx + dy * dy);
 			};
 
-			return std::min_element(
-			    armors.begin(), armors.end(), [&](const Armor& lhs, const Armor& rhs) {
-				    const int lhs_priority = priority_value(lhs.priority);
-				    const int rhs_priority = priority_value(rhs.priority);
+			std::stable_sort(order.begin(), order.end(), [&](std::size_t lhs, std::size_t rhs) {
+				const Armor& lhs_armor = armors[lhs];
+				const Armor& rhs_armor = armors[rhs];
 
-				    if(lhs_priority != rhs_priority)
-				    {
-					    return lhs_priority < rhs_priority;
-				    }
+				const int lhs_priority = priority_value(lhs_armor.priority);
+				const int rhs_priority = priority_value(rhs_armor.priority);
 
-				    return center_distance(lhs) < center_distance(rhs);
-			    });
+				if(lhs_priority != rhs_priority)
+				{
+					return lhs_priority < rhs_priority;
+				}
+
+				return center_distance(lhs_armor) < center_distance(rhs_armor);
+			});
+
+			return order;
 		}
 
 	} // namespace
@@ -125,25 +141,13 @@ namespace app::auto_aim
 			return result;
 		}
 
-		// ---- 2. pre-tracker 确定性目标选择 ----
+		// ---- 2. pre-tracker 确定性候选排序 ----
 		const cv::Point2f image_center{frame.image.cols * 0.5F, frame.image.rows * 0.5F};
 
-		const auto selected =
-		    select_pre_tracker_target(detection.armors, image_center);
+		const std::vector<std::size_t> order =
+		    order_candidates(detection.armors, image_center);
 
-		// ---- 3. 按候选顺序尝试 PnP ----
-		// 首选由 select_pre_tracker_target 决定。
-		std::vector<std::size_t> order(detection.armors.size());
-		std::iota(order.begin(), order.end(), std::size_t{0});
-
-		if(selected != detection.armors.end())
-		{
-			const std::size_t first_index =
-			    static_cast<std::size_t>(selected - detection.armors.begin());
-
-			std::swap(order[0], *std::find(order.begin(), order.end(), first_index));
-		}
-
+		// ---- 3. 严格按排序后的候选顺序尝试 PnP ----
 		solver_.set_r_gimbal_to_world(frame.q_imu_body_to_world);
 
 		for(const std::size_t index: order)

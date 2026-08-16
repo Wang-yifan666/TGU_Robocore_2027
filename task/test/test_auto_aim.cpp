@@ -8,7 +8,7 @@
  * - zero detections -> NoTarget
  * - one valid detection -> Detecting
  * - multiple detections 目标排序（pre-tracker 确定性选择）
- * - PnP failure -> NoTarget（单块 PnP 失败不视为 fatal Error）
+ * - 退化相机矩阵（fx/fy=0）-> Solver 非法，AutoAim 不应 ready
  * - successful solved target -> xyz_in_gimbal finite, distance > 0
  * - reset / frame counter 行为
  */
@@ -187,8 +187,8 @@ namespace
 		return config;
 	}
 
-	// 退化相机矩阵（3x3 全零）能通过 is_valid()，但 solvePnP 会产生非有限结果，
-	// 被 Solver 防御性校验拒绝 -> 确定性 PnP failure。
+	// 退化相机矩阵（3x3 全零）：fx / fy 均为 0，
+	// Solver 构造时 valid_ 应判定为 false，AutoAim 不应视为 ready。
 	auto_aim::SolverConfig make_degenerate_solver_config()
 	{
 		auto_aim::SolverConfig config;
@@ -434,29 +434,27 @@ namespace
 	}
 
 	// ============================================================
-	// 测试：PnP 失败 -> NoTarget
+	// 测试：退化相机矩阵 -> Solver 非法，AutoAim 不应 ready
 	// ============================================================
 
-	void test_pnp_failure(TestRunner& runner)
+	void test_degenerate_solver_not_ready(TestRunner& runner)
 	{
-		runner.begin("PnP failure");
+		runner.begin("Degenerate solver not ready");
 
-		// 检测本身几何有效，但退化相机矩阵导致 solvePnP 输出非有限结果，
-		// 被 Solver 防御性校验拒绝 -> AutoAim 返回 NoTarget，而非 fatal Error。
 		auto auto_aim = build_auto_aim({make_valid_blue_three(kNearKeypoints)},
 		                               make_degenerate_solver_config());
 
-		runner.expect(auto_aim.is_ready(),
-		              "AutoAim should be considered ready (solver is_valid on 3x3 non-empty)");
+		runner.expect(!auto_aim.is_ready(),
+		              "Zero-fx/fy camera matrix should make Solver invalid, AutoAim not ready");
 
 		auto_aim::FrameContext frame;
 		frame.image = make_test_image();
 
 		const auto result = auto_aim.process(frame);
 
-		runner.expect(result.state == auto_aim::AimState::NoTarget,
-		              "PnP failure should produce NoTarget (not fatal Error)");
-		runner.expect(!result.has_target, "PnP failure result should have no target");
+		runner.expect(result.state == auto_aim::AimState::Error,
+		              "Unready AutoAim should produce Error state");
+		runner.expect(!result.has_target, "Error result should have no target");
 
 		runner.end();
 	}
@@ -508,7 +506,7 @@ int main()
 	test_zero_detections(runner);
 	test_one_valid_detection(runner);
 	test_multiple_detections_ordering(runner);
-	test_pnp_failure(runner);
+	test_degenerate_solver_not_ready(runner);
 	test_reset_frame_counter(runner);
 
 	runner.print_summary();
