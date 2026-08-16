@@ -19,7 +19,7 @@ namespace
 	namespace detail = app::auto_aim::detector_detail;
 
 	// ============================================================
-	// 简单测试运行器
+	// 简单测试运行器（支持 PASS / FAIL / SKIP）
 	// ============================================================
 
 	class TestRunner
@@ -29,16 +29,16 @@ namespace
 		{
 			current_test_ = name;
 			current_test_failed_ = false;
+			current_test_skipped_ = false;
 
 			std::printf("===== %.*s =====\n", static_cast<int>(name.size()), name.data());
 		}
 
 		void expect(bool condition, std::string_view message)
 		{
-			++check_count_;
-
 			if(condition)
 			{
+				++pass_count_;
 				std::printf("[PASS] %.*s\n", static_cast<int>(message.size()), message.data());
 				return;
 			}
@@ -49,10 +49,26 @@ namespace
 			std::printf("[FAIL] %.*s\n", static_cast<int>(message.size()), message.data());
 		}
 
+		void skip(std::string_view reason)
+		{
+			++skip_count_;
+			current_test_skipped_ = true;
+
+			std::printf("[SKIP] %s\n", std::string(reason).c_str());
+		}
+
 		void end()
 		{
-			std::printf("[%s] %.*s\n\n", current_test_failed_ ? "FAILED" : "PASSED",
-			            static_cast<int>(current_test_.size()), current_test_.data());
+			if(current_test_skipped_)
+			{
+				std::printf("[SKIPPED] %.*s\n\n", static_cast<int>(current_test_.size()),
+				            current_test_.data());
+			}
+			else
+			{
+				std::printf("[%s] %.*s\n\n", current_test_failed_ ? "FAILED" : "PASSED",
+				            static_cast<int>(current_test_.size()), current_test_.data());
+			}
 		}
 
 		[[nodiscard]] int failure_count() const noexcept
@@ -60,21 +76,29 @@ namespace
 			return failure_count_;
 		}
 
+		[[nodiscard]] int skip_count() const noexcept
+		{
+			return skip_count_;
+		}
+
 		void print_summary() const
 		{
 			std::printf("========================================\n");
-			std::printf("Checks:   %d\n", check_count_);
-			std::printf("Failures: %d\n", failure_count_);
+			std::printf("Passed:    %d\n", pass_count_);
+			std::printf("Failed:    %d\n", failure_count_);
+			std::printf("Skipped:   %d\n", skip_count_);
 			std::printf("========================================\n");
 		}
 
 	private:
 		std::string_view current_test_;
 
-		int check_count_ = 0;
+		int pass_count_ = 0;
 		int failure_count_ = 0;
+		int skip_count_ = 0;
 
 		bool current_test_failed_ = false;
+		bool current_test_skipped_ = false;
 	};
 
 	bool near(double lhs, double rhs, double tolerance = 1e-6)
@@ -102,7 +126,7 @@ namespace
 		runner.expect(near(detail::letterbox_scale(480, 640, 640, 640), 1.0),
 		              "640x480 scale should be 1.0");
 
-		// 竖图 480x640（宽<高，纵向受限）
+		// 竖图 480x640（宽<高，宽度受限）
 		runner.expect(near(detail::letterbox_scale(640, 480, 640, 640), 1.0),
 		              "480x640 (portrait) scale should be 1.0 (width-limited)");
 
@@ -146,9 +170,9 @@ namespace
 		runner.end();
 	}
 
-	void test_decode_row(TestRunner& runner)
+	void test_decode_yolov5_row(TestRunner& runner)
 	{
-		runner.begin("decode row");
+		runner.begin("decode yolov5 row");
 
 		float row[detail::kYoloV5RowWidth] = {};
 
@@ -182,11 +206,12 @@ namespace
 		row[20] = 0.1F;
 		row[21] = 0.1F;
 
-		const auto decoded = detail::decode_row(row, 0.5, 0.5F);
+		const auto decoded = detail::decode_yolov5_row(row, 0.5, 0.5F);
 
 		runner.expect(decoded.accepted, "row should be accepted");
 
-		runner.expect(near(decoded.detection.confidence, 0.5), "confidence should be sigmoid(0)=0.5");
+		runner.expect(near(decoded.detection.confidence, 0.5),
+		              "confidence should be sigmoid(0)=0.5");
 
 		runner.expect(decoded.detection.color_id == 1, "color_id should be 1");
 		runner.expect(decoded.detection.number_id == 3, "number_id should be 3");
@@ -206,28 +231,28 @@ namespace
 		runner.end();
 	}
 
-	void test_decode_row_low_confidence(TestRunner& runner)
+	void test_decode_yolov5_row_low_confidence(TestRunner& runner)
 	{
-		runner.begin("decode row low confidence");
+		runner.begin("decode yolov5 row low confidence");
 
 		float row[detail::kYoloV5RowWidth] = {};
 		row[8] = -10.0F; // sigmoid -> 接近 0
 
-		const auto decoded = detail::decode_row(row, 0.5, 0.5F);
+		const auto decoded = detail::decode_yolov5_row(row, 0.5, 0.5F);
 
 		runner.expect(!decoded.accepted, "low objectness row should be rejected");
 
 		runner.end();
 	}
 
-	void test_decode_row_nan(TestRunner& runner)
+	void test_decode_yolov5_row_nan(TestRunner& runner)
 	{
-		runner.begin("decode row NaN");
+		runner.begin("decode yolov5 row NaN");
 
 		float row[detail::kYoloV5RowWidth] = {};
 		row[0] = std::numeric_limits<float>::quiet_NaN();
 
-		const auto decoded = detail::decode_row(row, 0.5, 0.5F);
+		const auto decoded = detail::decode_yolov5_row(row, 0.5, 0.5F);
 
 		runner.expect(!decoded.accepted, "row containing NaN should be rejected");
 
@@ -251,12 +276,12 @@ namespace
 
 		if(!std::filesystem::exists(model_path))
 		{
-			std::printf("[SKIP] model not found at %s\n", model_path.c_str());
+			runner.skip("model not found");
 			runner.end();
 			return;
 		}
 
-		auto_aim::OpenVINOInference inference(model_path.string(), "CPU", 0.5F);
+		auto_aim::OpenVINOInference inference(model_path.string(), "CPU", 0.70F);
 
 		runner.expect(inference.is_ready(), "OpenVINOInference should be ready after load");
 
@@ -272,12 +297,11 @@ namespace
 		{
 			const auto detections = inference.infer(image);
 
-			for(const auto& detection : detections)
+			for(const auto& detection: detections)
 			{
-				runner.expect(std::isfinite(detection.confidence),
-				              "confidence should be finite");
+				runner.expect(std::isfinite(detection.confidence), "confidence should be finite");
 
-				for(const auto& point : detection.keypoints)
+				for(const auto& point: detection.keypoints)
 				{
 					runner.expect(std::isfinite(point.x) && std::isfinite(point.y),
 					              "keypoint should be finite");
@@ -312,9 +336,9 @@ int main()
 	test_letterbox_scale(runner);
 	test_letterbox_size(runner);
 	test_map_point(runner);
-	test_decode_row(runner);
-	test_decode_row_low_confidence(runner);
-	test_decode_row_nan(runner);
+	test_decode_yolov5_row(runner);
+	test_decode_yolov5_row_low_confidence(runner);
+	test_decode_yolov5_row_nan(runner);
 	test_openvino_smoke(runner);
 
 	runner.print_summary();
@@ -325,6 +349,6 @@ int main()
 		return 1;
 	}
 
-	std::printf("=== All OpenVINO inference tests passed ===\n");
+	std::printf("=== OpenVINO inference tests passed (skipped=%d) ===\n", runner.skip_count());
 	return 0;
 }

@@ -59,7 +59,7 @@ namespace app::auto_aim
 			return result;
 		}
 
-		++ frame_count_;
+		++frame_count_;
 
 		// TODO : detector
 		// 调用推理

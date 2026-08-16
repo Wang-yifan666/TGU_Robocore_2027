@@ -10,12 +10,12 @@
 
 #include "tools/logger.hpp"
 
-namespace tools {
+namespace tools
+{
 
-inline constexpr const char* DEFAULT_LOGGER_CONFIG_PATH =
-    "config/tools/logger_config.toml";
+	inline constexpr const char* DEFAULT_LOGGER_CONFIG_PATH = "config/tools/logger_config.toml";
 
-/**
+	/**
  * @brief Load LoggerConfig from a TOML file.
  *
  * Missing configuration items keep the values already stored in config.
@@ -26,11 +26,10 @@ inline constexpr const char* DEFAULT_LOGGER_CONFIG_PATH =
  * @param error_message Optional error description.
  * @return true if the file was parsed and validated successfully.
  */
-[[nodiscard]] bool load_logger_config(
-    const std::filesystem::path& config_path,
-    LoggerConfig& config,
-    std::string* error_message = nullptr);
+	[[nodiscard]] bool load_logger_config(const std::filesystem::path& config_path,
+	                                      LoggerConfig& config,
+	                                      std::string* error_message = nullptr);
 
-}  // namespace tools
+} // namespace tools
 
-#endif  // TGU_ROBOCORE_2027_LOGGER_CONFIG_LOADER_HPP
+#endif // TGU_ROBOCORE_2027_LOGGER_CONFIG_LOADER_HPP

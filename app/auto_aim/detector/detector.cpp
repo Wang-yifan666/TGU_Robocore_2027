@@ -229,7 +229,7 @@ namespace app::auto_aim
 				continue;
 			}
 
-			if(detection.confidence < config_.confidence_threshold)
+			if(detection.confidence < config_.min_confidence)
 			{
 				continue;
 			}
@@ -279,7 +279,7 @@ namespace app::auto_aim
 			return false;
 		}
 
-		if(armor.confidence < config_.confidence_threshold)
+		if(armor.confidence < config_.min_confidence)
 		{
 			return false;
 		}

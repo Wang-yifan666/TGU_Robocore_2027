@@ -1,8 +1,9 @@
 [detector]
 enemy_color = "blue"
 
-confidence_threshold = 0.50
-nms_threshold = 0.45
+inference_score_threshold = 0.70
+min_confidence = 0.80
+nms_threshold = 0.30
 
 min_armor_ratio = 1.0
 max_armor_ratio = 6.0

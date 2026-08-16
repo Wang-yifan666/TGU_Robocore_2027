@@ -16,8 +16,14 @@ namespace app::auto_aim
 	{
 		ArmorColor enemy_color = ArmorColor::Blue;
 
-		float confidence_threshold = 0.5F;
-		float nms_threshold = 0.45F;
+		/// 网络输出 objectness 的 early-reject 阈值（对应旧 YOLOv5 score_threshold）。
+		float inference_score_threshold = 0.7F;
+
+		/// Armor 过滤阶段的最小置信度（对应旧配置 min_confidence）。
+		float min_confidence = 0.8F;
+
+		/// NMS IoU 阈值。
+		float nms_threshold = 0.3F;
 
 		double min_armor_ratio = 1.0;
 		double max_armor_ratio = 6.0;

@@ -70,10 +70,19 @@ namespace app::auto_aim
 				return false;
 			}
 
-			if(!is_valid_probability(config.confidence_threshold))
+			if(!is_valid_probability(config.inference_score_threshold))
 			{
 				LOG_ERROR(kLogModule,
-				          "confidence_threshold must be "
+				          "inference_score_threshold must be "
+				          "between 0 and 1");
+
+				return false;
+			}
+
+			if(!is_valid_probability(config.min_confidence))
+			{
+				LOG_ERROR(kLogModule,
+				          "min_confidence must be "
 				          "between 0 and 1");
 
 				return false;
@@ -171,11 +180,14 @@ namespace app::auto_aim
 
 			loaded_config.enemy_color = armor_color_from_string(enemy_color);
 
-			loaded_config.confidence_threshold =
-			    static_cast<float>((*detector_table)["confidence_threshold"].value_or(0.50));
+			loaded_config.inference_score_threshold =
+			    static_cast<float>((*detector_table)["inference_score_threshold"].value_or(0.70));
+
+			loaded_config.min_confidence =
+			    static_cast<float>((*detector_table)["min_confidence"].value_or(0.80));
 
 			loaded_config.nms_threshold =
-			    static_cast<float>((*detector_table)["nms_threshold"].value_or(0.45));
+			    static_cast<float>((*detector_table)["nms_threshold"].value_or(0.30));
 
 			loaded_config.min_armor_ratio = (*detector_table)["min_armor_ratio"].value_or(1.0);
 
@@ -227,10 +239,10 @@ namespace app::auto_aim
 
 			LOG_INFO(kLogModule,
 			         "loaded detector config: "
-			         "enemy={}, confidence={:.2f}, "
-			         "nms={:.2f}, device={}",
-			         to_string(config.enemy_color), config.confidence_threshold,
-			         config.nms_threshold, config.device);
+			         "enemy={}, inference_score={:.2f}, "
+			         "min_confidence={:.2f}, nms={:.2f}, device={}",
+			         to_string(config.enemy_color), config.inference_score_threshold,
+			         config.min_confidence, config.nms_threshold, config.device);
 
 			return true;
 		}

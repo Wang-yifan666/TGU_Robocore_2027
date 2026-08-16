@@ -135,8 +135,9 @@ namespace
 
 		config.enemy_color = auto_aim::ArmorColor::Blue;
 
-		config.confidence_threshold = 0.50F;
-		config.nms_threshold = 0.45F;
+		config.inference_score_threshold = 0.70F;
+		config.min_confidence = 0.80F;
+		config.nms_threshold = 0.30F;
 
 		config.min_armor_ratio = 1.0;
 		config.max_armor_ratio = 6.0;
@@ -153,7 +154,7 @@ namespace
 	}
 
 
-    // 更改测试时的敌人
+	// 更改测试时的敌人
 	auto_aim::RawDetection make_detection(const std::array<cv::Point2f, 4>& keypoints,
 	                                      int color_id = 0, int number_id = 3,
 	                                      float confidence = 0.90F)

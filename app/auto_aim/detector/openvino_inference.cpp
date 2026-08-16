@@ -51,10 +51,10 @@ namespace app::auto_aim::detector_detail
 
 	double letterbox_scale(const int src_h, const int src_w, const int dst_h, const int dst_w)
 	{
-		const auto x_scale = static_cast<double>(dst_h) / static_cast<double>(src_h);
-		const auto y_scale = static_cast<double>(dst_w) / static_cast<double>(src_w);
+		const auto height_scale = static_cast<double>(dst_h) / static_cast<double>(src_h);
+		const auto width_scale = static_cast<double>(dst_w) / static_cast<double>(src_w);
 
-		return std::min(x_scale, y_scale);
+		return std::min(height_scale, width_scale);
 	}
 
 	cv::Size letterbox_size(const int src_h, const int src_w, const double scale)
@@ -71,7 +71,7 @@ namespace app::auto_aim::detector_detail
 		        static_cast<float>(static_cast<double>(point.y) / scale)};
 	}
 
-	DecodedRow decode_row(const float* row, const double scale, const float confidence_threshold)
+	DecodedRow decode_yolov5_row(const float* row, const double scale, const float score_threshold)
 	{
 		DecodedRow result;
 		result.accepted = false;
@@ -88,7 +88,7 @@ namespace app::auto_aim::detector_detail
 		// col[8] 为 objectness 原始 logit，需 sigmoid。
 		const float confidence = sigmoid(row[8]);
 
-		if(confidence < confidence_threshold)
+		if(confidence < score_threshold)
 		{
 			return result;
 		}
@@ -127,24 +127,35 @@ namespace app::auto_aim
 	}
 
 	OpenVINOInference::OpenVINOInference(std::string model_path, std::string device,
-	                                     const float confidence_threshold):
-	model_path_(std::move(model_path)),
-	device_(std::move(device)), confidence_threshold_(confidence_threshold)
+	                                     const float score_threshold):
+	model_path_(std::move(model_path)), device_(std::move(device)), score_threshold_(score_threshold)
 	{
 		try
 		{
 			auto model = core_.read_model(model_path_);
 
-			// 从模型本身读取输入 H/W，不硬编码尺寸。
+			// 从模型本身读取输入 shape，校验 [1, 3, H, W]（NCHW）。
 			const ov::PartialShape input_shape = model->input().get_partial_shape();
 
 			if(!input_shape.rank().is_static() || input_shape.rank().get_length() != 4)
 			{
 				throw std::runtime_error(std::format(
 				    "unexpected input rank: {} (expected 4)",
-				    input_shape.rank().is_static()
-				        ? std::to_string(input_shape.rank().get_length())
-				        : std::string("dynamic")));
+				    input_shape.rank().is_static() ? std::to_string(input_shape.rank().get_length())
+				                                   : std::string("dynamic")));
+			}
+
+			const auto batch = input_shape[0];
+			const auto channels = input_shape[1];
+
+			if(!batch.is_static() || batch.get_length() != 1)
+			{
+				throw std::runtime_error("expected input batch == 1");
+			}
+
+			if(!channels.is_static() || channels.get_length() != 3)
+			{
+				throw std::runtime_error("expected input channels == 3");
 			}
 
 			const auto height = input_shape[2];
@@ -152,7 +163,8 @@ namespace app::auto_aim
 
 			if(!height.is_static() || !width.is_static())
 			{
-				throw std::runtime_error("input height/width is dynamic, cannot infer letterbox size");
+				throw std::runtime_error(
+				    "input height/width is dynamic, cannot infer letterbox size");
 			}
 
 			input_h_ = static_cast<std::size_t>(height.get_length());
@@ -213,6 +225,11 @@ namespace app::auto_aim
 			return {};
 		}
 
+		if(image.type() != CV_8UC3)
+		{
+			throw std::invalid_argument("OpenVINOInference expects a CV_8UC3 BGR image");
+		}
+
 		if(!ready_)
 		{
 			throw std::runtime_error("OpenVINO inference is not ready");
@@ -249,11 +266,16 @@ namespace app::auto_aim
 			    std::format("unexpected output rank {} (expected 3)", output_shape.size()));
 		}
 
+		if(output_shape[0] != 1)
+		{
+			throw std::runtime_error(
+			    std::format("unexpected output batch {} (expected 1)", output_shape[0]));
+		}
+
 		if(output_shape[2] != detector_detail::kYoloV5RowWidth)
 		{
-			throw std::runtime_error(std::format(
-			    "unexpected output row width {} (expected {})", output_shape[2],
-			    detector_detail::kYoloV5RowWidth));
+			throw std::runtime_error(std::format("unexpected output row width {} (expected {})",
+			                                     output_shape[2], detector_detail::kYoloV5RowWidth));
 		}
 
 		if(output_tensor.get_element_type() != ov::element::f32)
@@ -269,8 +291,8 @@ namespace app::auto_aim
 
 		for(std::size_t row_index = 0; row_index < row_count; ++row_index)
 		{
-			const auto decoded = detector_detail::decode_row(
-			    data + row_index * detector_detail::kYoloV5RowWidth, scale, confidence_threshold_);
+			const auto decoded = detector_detail::decode_yolov5_row(
+			    data + row_index * detector_detail::kYoloV5RowWidth, scale, score_threshold_);
 
 			if(decoded.accepted)
 			{

@@ -81,16 +81,16 @@ namespace app::auto_aim::detector_detail
 	};
 
 	/**
-	 * @brief 解码一行输出（22 个 float），并按置信度阈值做 early reject。
+	 * @brief 解码一行 YOLOv5 输出（22 个 float），并按置信度阈值做 early reject。
 	 *
 	 * 关键点顺序固定复现旧代码的 {col0/1, col6/7, col4/5, col2/3}。
 	 *
 	 * @param row 指向输出 tensor 一行的 22 个 float。
 	 * @param scale letterbox 缩放比例。
-	 * @param confidence_threshold objectness 阈值，低于该值则 accepted=false。
+	 * @param score_threshold objectness 阈值，低于该值则 accepted=false。
 	 * @return DecodedRow；非法（NaN/Inf 关键点或置信度、非有限类别分数）时 accepted=false。
 	 */
-	DecodedRow decode_row(const float* row, double scale, float confidence_threshold);
+	DecodedRow decode_yolov5_row(const float* row, double scale, float score_threshold);
 
 } // namespace app::auto_aim::detector_detail
 
@@ -100,16 +100,16 @@ namespace app::auto_aim
 	/**
 	 * @brief 基于 OpenVINO 的 YOLOv5 推理后端。
 	 */
-	class OpenVINOInference final : public Inference
+	class OpenVINOInference final: public Inference
 	{
 	public:
 		/**
 		 * @param model_path OpenVINO IR .xml 模型路径。
 		 * @param device 推理设备，例如 "CPU" / "GPU"。
-		 * @param confidence_threshold objectness 置信度阈值，用于内存内 early reject。
-		 *        （与 DetectorConfig::confidence_threshold 同一来源）
+		 * @param score_threshold objectness 置信度阈值，用于内存内 early reject。
+		 *        （对应 DetectorConfig::inference_score_threshold）
 		 */
-		OpenVINOInference(std::string model_path, std::string device, float confidence_threshold);
+		OpenVINOInference(std::string model_path, std::string device, float score_threshold);
 
 		[[nodiscard]] bool is_ready() const noexcept override;
 
@@ -118,7 +118,7 @@ namespace app::auto_aim
 	private:
 		std::string model_path_;
 		std::string device_;
-		float confidence_threshold_ = 0.5F;
+		float score_threshold_ = 0.7F;
 
 		ov::Core core_;
 		ov::CompiledModel compiled_model_;

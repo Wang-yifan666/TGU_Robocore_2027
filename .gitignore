@@ -5,7 +5,8 @@
 tmp/
 build/
 .cline/
-data/models/
+data/models/*
+!data/models/README.md
 
 *.txt
 *.log
