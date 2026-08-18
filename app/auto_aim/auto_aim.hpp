@@ -18,7 +18,10 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <vector>
 
 #include <Eigen/Geometry>
 #include <opencv2/core.hpp>
@@ -90,6 +93,37 @@ namespace app::auto_aim
 	};
 
 	/**
+	 * @brief 单帧自瞄中间状态（旁路观察用，不改变算法行为）。
+	 *
+	 * 仅在调用方显式传入非空指针时填充；正常运行传入 nullptr 时零额外开销。
+	 * 每帧 process() 开头都会清空 debug，保证 NoFrame / Error / NoTarget
+	 * 等 early return 也不会残留上一帧数据。
+	 */
+	struct AutoAimDebugData
+	{
+		/**
+		 * @brief Detector 原始输出（NMS 后、Solver 修改之前），
+		 *        顺序与 DetectionResult::armors 完全一致。
+		 *
+		 * 注意：这些 Armor 的空间坐标（xyz_in_gimbal / xyz_in_world 等）
+		 * 尚未被 Solver 填充。最终目标的空间信息请从 AimResult::target 获取。
+		 */
+		std::vector<Armor> detected_armors;
+
+		/**
+		 * @brief 最终被选中且 PnP 成功的装甲板在 detected_armors 中的下标。
+		 *
+		 * 语义：该下标是 Detector 输出（NMS 后）的原始顺序 index，
+		 *       不是 order_candidates() 排序后的 rank。
+		 * 无成功目标（NoTarget / NoFrame / Error）时保持空。
+		 */
+		std::optional<std::size_t> selected_armor_index;
+
+		double inference_time_ms = 0.0;
+		double postprocess_time_ms = 0.0;
+	};
+
+	/**
 	 * @brief 自瞄 facade：持有 Detector 与 Solver，逐帧编排检测/选择/解算。
 	 */
 	class AutoAim
@@ -97,7 +131,13 @@ namespace app::auto_aim
 	public:
 		AutoAim(Detector detector, Solver solver);
 
-		AimResult process(const FrameContext& frame);
+		/**
+		 * @brief 处理单帧输入。
+		 * @param frame 单帧输入上下文（图像、时间戳、IMU 四元数）。
+		 * @param debug 可选的旁路调试输出；为 nullptr 时正常实车路径零额外开销。
+		 * @return 单帧自瞄结果。
+		 */
+		AimResult process(const FrameContext& frame, AutoAimDebugData* debug = nullptr);
 
 		void reset();
 

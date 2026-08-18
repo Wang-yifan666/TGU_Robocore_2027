@@ -20,6 +20,7 @@ add_executable(test_usb_camera test/test_usb_camera.cpp)
 add_executable(test_detector test/test_detector.cpp)
 add_executable(test_openvino_inference test/test_openvino_inference.cpp)
 add_executable(test_auto_aim test/test_auto_aim.cpp)
+add_executable(test_auto_aim_visual test/test_auto_aim_visual.cpp)
 add_executable(test_auto_aim_pipeline test/test_auto_aim_pipeline.cpp)
 add_executable(test_solver_config test/test_solver_config.cpp)
 
@@ -96,8 +97,19 @@ target_link_libraries(test_auto_aim PRIVATE
     Eigen3::Eigen
 )
 
+target_compile_definitions(test_auto_aim_visual PRIVATE
+    PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+)
+
 target_compile_definitions(test_auto_aim_pipeline PRIVATE
     PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+)
+
+target_link_libraries(test_auto_aim_visual PRIVATE
+    app
+    tools
+    ${OpenCV_LIBS}
+    Eigen3::Eigen
 )
 
 target_link_libraries(test_auto_aim_pipeline PRIVATE

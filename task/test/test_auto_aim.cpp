@@ -11,6 +11,8 @@
  * - 退化相机矩阵（fx/fy=0）-> Solver 非法，AutoAim 不应 ready
  * - successful solved target -> xyz_in_gimbal finite, distance > 0
  * - reset / frame counter 行为
+ * - debug 模式与非 debug 模式算法行为等价（双实例对比）
+ * - debug 生命周期：early return / 跨帧残留均必须清零
  */
 
 #include "app/auto_aim/auto_aim.hpp"
@@ -135,6 +137,40 @@ namespace
 		cv::Size last_image_size_;
 	};
 
+	// 逐帧返回不同检测结果的 FakeInference（测试 debug 生命周期用）。
+	class QueueFakeInference final: public auto_aim::Inference
+	{
+	public:
+		explicit QueueFakeInference(std::vector<std::vector<auto_aim::RawDetection>> frames,
+		                            bool ready = true): frames_(std::move(frames)), ready_(ready)
+		{
+		}
+
+		[[nodiscard]] bool is_ready() const noexcept override
+		{
+			return ready_;
+		}
+
+		std::vector<auto_aim::RawDetection> infer(const cv::Mat& image) override
+		{
+			(void)image;
+
+			if(index_ < frames_.size())
+			{
+				return frames_[index_++];
+			}
+
+			return {};
+		}
+
+	private:
+		std::vector<std::vector<auto_aim::RawDetection>> frames_;
+
+		bool ready_ = true;
+
+		std::size_t index_ = 0;
+	};
+
 	// ============================================================
 	// 测试数据构造
 	// ============================================================
@@ -237,6 +273,23 @@ namespace
 		auto_aim::Solver solver(solver_config);
 
 		return auto_aim::AutoAim(std::move(detector), std::move(solver));
+	}
+
+	// 用假数据填满 debug，验证 empty-frame / error 路径会将其清空。
+	void fill_debug_with_fake_data(auto_aim::AutoAimDebugData& debug)
+	{
+		auto_aim::Armor fake_armor;
+		fake_armor.name = auto_aim::ArmorName::Three;
+		fake_armor.type = auto_aim::ArmorType::Small;
+		fake_armor.color = auto_aim::ArmorColor::Blue;
+		fake_armor.confidence = 0.99F;
+		fake_armor.points = {cv::Point2f(0.0F, 0.0F), cv::Point2f(10.0F, 0.0F),
+		                     cv::Point2f(10.0F, 20.0F), cv::Point2f(0.0F, 20.0F)};
+
+		debug.detected_armors = {fake_armor};
+		debug.selected_armor_index = 0;
+		debug.inference_time_ms = 12.34;
+		debug.postprocess_time_ms = 5.67;
 	}
 
 	bool is_finite_point(const cv::Point2f& point)
@@ -493,6 +546,206 @@ namespace
 		runner.end();
 	}
 
+	// ============================================================
+	// 测试：debug 模式与非 debug 模式算法行为等价
+	// ============================================================
+	//
+	// 必须使用两个初始状态完全相同的独立 AutoAim 实例，
+	// 分别调用 process(frame) 和 process(frame, &debug)，
+	// 禁止用同一个实例连续调用两次（避免 frame counter 差异污染）。
+
+	void test_debug_behavior_equivalence(TestRunner& runner)
+	{
+		runner.begin("Debug behavior equivalence");
+
+		auto_aim::SolverConfig solver_config = make_valid_solver_config();
+
+		// 两个检测：远 + 近，触发 pre-tracker ordering 分支。
+		const std::vector<auto_aim::RawDetection> detections = {
+		    make_valid_blue_three(kFarKeypoints), make_valid_blue_three(kNearKeypoints)};
+
+		auto lhs = build_auto_aim(detections, solver_config);
+		auto rhs = build_auto_aim(detections, solver_config);
+
+		auto_aim::FrameContext frame;
+		frame.image = make_test_image();
+		frame.timestamp_s = 12.5;
+
+		const auto result_plain = lhs.process(frame);
+
+		auto_aim::AutoAimDebugData debug;
+		const auto result_debug = rhs.process(frame, &debug);
+
+		// 核心结果必须完全一致。
+		runner.expect(result_plain.state == result_debug.state,
+		              "AimState should be identical with/without debug");
+		runner.expect(result_plain.has_target == result_debug.has_target,
+		              "has_target should be identical with/without debug");
+		runner.expect(std::abs(result_plain.distance - result_debug.distance) < 1e-9,
+		              "distance should be identical with/without debug");
+		runner.expect(std::abs(result_plain.timestamp_s - result_debug.timestamp_s) < 1e-12,
+		              "timestamp should be identical with/without debug");
+
+		if(result_plain.has_target)
+		{
+			runner.expect(result_plain.target.name == result_debug.target.name,
+			              "Target name should be identical");
+			runner.expect(result_plain.target.type == result_debug.target.type,
+			              "Target type should be identical");
+			runner.expect(result_plain.target.color == result_debug.target.color,
+			              "Target color should be identical");
+			runner.expect(result_plain.target.center == result_debug.target.center,
+			              "Target center should be identical");
+			runner.expect(result_plain.target.points.size() == result_debug.target.points.size(),
+			              "Target points count should be identical");
+
+			if(result_plain.target.points.size() == result_debug.target.points.size())
+			{
+				for(std::size_t i = 0; i < result_plain.target.points.size(); ++i)
+				{
+					runner.expect(result_plain.target.points[i] == result_debug.target.points[i],
+					              "Target 2D points should be identical");
+				}
+			}
+
+			const double xyz_error =
+			    (result_plain.target.xyz_in_gimbal - result_debug.target.xyz_in_gimbal).norm();
+			runner.expect(xyz_error < 1e-9,
+			              "Target xyz_in_gimbal should be identical with/without debug");
+		}
+
+		// 近目标（原始顺序 index 1）应被选中，且 debug 下标指向同一块装甲板。
+		if(debug.selected_armor_index.has_value())
+		{
+			runner.expect(*debug.selected_armor_index == 1,
+			              "Near-center armor (original index 1) should be selected");
+			runner.expect(debug.detected_armors.size() == 2,
+			              "Debug should expose both detected armors");
+			runner.expect(cv::norm(debug.detected_armors[*debug.selected_armor_index].center
+			                           - result_plain.target.center)
+			                  < 1e-3,
+			              "Debug selected index should point to the same armor as AimResult");
+
+			// debug 中的检测结果不应被 Solver 污染：空间坐标仍为 0。
+			const double zero_norm =
+			    debug.detected_armors[*debug.selected_armor_index].xyz_in_gimbal.norm();
+			runner.expect(zero_norm < 1e-12,
+			              "Debug detected armors should be pre-Solver (xyz untouched)");
+		}
+		else
+		{
+			runner.expect(false, "Debug should record a selected armor index");
+		}
+
+		runner.end();
+	}
+
+	// ============================================================
+	// 测试：debug 生命周期 —— early return 必须清空 debug
+	// ============================================================
+
+	void test_debug_lifecycle_early_return(TestRunner& runner)
+	{
+		runner.begin("Debug lifecycle on early return");
+
+		// 1) Error 路径：依赖未就绪。
+		{
+			auto auto_aim = build_auto_aim({}, make_valid_solver_config(), /*detector_ready=*/false);
+
+			auto_aim::FrameContext frame;
+			frame.image = make_test_image();
+
+			auto_aim::AutoAimDebugData debug;
+			fill_debug_with_fake_data(debug);
+
+			const auto result = auto_aim.process(frame, &debug);
+
+			runner.expect(result.state == auto_aim::AimState::Error,
+			              "Unready dependencies should produce Error state");
+			runner.expect(debug.detected_armors.empty(), "Error path must clear detected_armors");
+			runner.expect(!debug.selected_armor_index.has_value(),
+			              "Error path must clear selected_armor_index");
+			runner.expect(debug.inference_time_ms == 0.0 && debug.postprocess_time_ms == 0.0,
+			              "Error path must clear timing");
+		}
+
+		// 2) NoFrame 路径：空帧。
+		{
+			auto auto_aim = build_auto_aim({make_valid_blue_three(kNearKeypoints)},
+			                               make_valid_solver_config());
+
+			auto_aim::FrameContext frame; // image 保持 empty
+
+			auto_aim::AutoAimDebugData debug;
+			fill_debug_with_fake_data(debug);
+
+			const auto result = auto_aim.process(frame, &debug);
+
+			runner.expect(result.state == auto_aim::AimState::NoFrame,
+			              "Empty frame should produce NoFrame state");
+			runner.expect(debug.detected_armors.empty(), "NoFrame path must clear detected_armors");
+			runner.expect(!debug.selected_armor_index.has_value(),
+			              "NoFrame path must clear selected_armor_index");
+			runner.expect(debug.inference_time_ms == 0.0 && debug.postprocess_time_ms == 0.0,
+			              "NoFrame path must clear timing");
+		}
+
+		runner.end();
+	}
+
+	// ============================================================
+	// 测试：debug 生命周期 —— 上一帧有检测、下一帧无检测不得残留
+	// ============================================================
+
+	void test_debug_lifecycle_no_residue(TestRunner& runner)
+	{
+		runner.begin("Debug lifecycle no residue across frames");
+
+		std::vector<std::vector<auto_aim::RawDetection>> frame_detections;
+		frame_detections.push_back({make_valid_blue_three(kNearKeypoints)}); // 有检测
+		frame_detections.push_back({});                                      // 无检测
+
+		auto fake = std::make_unique<QueueFakeInference>(std::move(frame_detections));
+		auto_aim::Detector detector(make_default_config(), std::move(fake));
+		auto_aim::Solver solver(make_valid_solver_config());
+		auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver));
+
+		auto_aim::FrameContext frame;
+		frame.image = make_test_image();
+
+		auto_aim::AutoAimDebugData debug;
+
+		const auto result_first = auto_aim.process(frame, &debug);
+
+		runner.expect(result_first.state == auto_aim::AimState::Detecting,
+		              "First frame with detection should detect");
+		runner.expect(debug.detected_armors.size() == 1,
+		              "First frame debug should expose the detected armor");
+		runner.expect(debug.selected_armor_index.has_value(),
+		              "First frame debug should record selected index");
+
+		const auto result_second = auto_aim.process(frame, &debug);
+
+		runner.expect(result_second.state == auto_aim::AimState::NoTarget,
+		              "Second frame without detection should be NoTarget");
+		runner.expect(debug.detected_armors.empty(),
+		              "Second frame must not retain previous frame armors");
+		runner.expect(!debug.selected_armor_index.has_value(),
+		              "Second frame must not retain previous frame selected index");
+
+		// NoTarget 帧仍然执行了 detect()，因此 timing 是当前帧的全新数据
+		// （允许非零），而不是上一帧的残留；残留只针对 armors / index。
+		// Error / NoFrame 路径的 timing 必须严格为 0 已由
+		// test_debug_lifecycle_early_return 覆盖。
+		runner.expect(std::isfinite(debug.inference_time_ms)
+		                  && debug.inference_time_ms >= 0.0
+		                  && std::isfinite(debug.postprocess_time_ms)
+		                  && debug.postprocess_time_ms >= 0.0,
+		              "Second frame timing should be fresh current-frame data");
+
+		runner.end();
+	}
+
 } // namespace
 
 int main()
@@ -508,6 +761,9 @@ int main()
 	test_multiple_detections_ordering(runner);
 	test_degenerate_solver_not_ready(runner);
 	test_reset_frame_counter(runner);
+	test_debug_behavior_equivalence(runner);
+	test_debug_lifecycle_early_return(runner);
+	test_debug_lifecycle_no_residue(runner);
 
 	runner.print_summary();
 

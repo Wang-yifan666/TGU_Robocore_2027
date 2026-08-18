@@ -110,8 +110,15 @@ namespace app::auto_aim
 		return detector_.is_ready() && solver_.is_valid();
 	}
 
-	AimResult AutoAim::process(const FrameContext& frame)
+	AimResult AutoAim::process(const FrameContext& frame, AutoAimDebugData* debug)
 	{
+		// 每帧先清空 debug，保证 NoFrame / Error / NoTarget 等 early return
+		// 不会残留上一帧数据。debug 为旁路观察，不改变算法行为。
+		if(debug != nullptr)
+		{
+			*debug = AutoAimDebugData{};
+		}
+
 		AimResult result;
 		result.timestamp_s = frame.timestamp_s;
 
@@ -133,6 +140,15 @@ namespace app::auto_aim
 
 		// ---- 1. 检测 ----
 		DetectionResult detection = detector_.detect(frame.image, frame_count_);
+
+		// 旁路观察：拷贝 Detector 原始输出（Solver 修改之前）。
+		// 仅 debug 模式下发生，正常运行（debug == nullptr）零开销。
+		if(debug != nullptr)
+		{
+			debug->detected_armors = detection.armors;
+			debug->inference_time_ms = detection.inference_time_ms;
+			debug->postprocess_time_ms = detection.postprocess_time_ms;
+		}
 
 		if(detection.armors.empty())
 		{
@@ -162,6 +178,13 @@ namespace app::auto_aim
 			}
 
 			// 单个 PnP 几何失败不视为全局错误，继续尝试下一候选。
+			// index 是 detection.armors（即 debug.detected_armors）的原始下标，
+			// 不是 order_candidates() 排序后的 rank。
+			if(debug != nullptr)
+			{
+				debug->selected_armor_index = index;
+			}
+
 			result.has_target = true;
 			result.state = AimState::Detecting;
 			result.target = candidate;
