@@ -19,6 +19,7 @@
 #include "app/auto_aim/detector/detector.hpp"
 #include "app/auto_aim/solver.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -288,6 +289,7 @@ namespace
 
 		debug.detected_armors = {fake_armor};
 		debug.selected_armor_index = 0;
+		debug.solved_armor_indices = {0};
 		debug.inference_time_ms = 12.34;
 		debug.postprocess_time_ms = 5.67;
 	}
@@ -617,6 +619,41 @@ namespace
 			    (result_plain.target.xyz_in_gimbal - result_debug.target.xyz_in_gimbal).norm();
 			runner.expect(xyz_error < 1e-9,
 			              "Target xyz_in_gimbal should be identical with/without debug");
+		}
+
+		// observations 数量与内容必须一致（debug 仅旁路观察，不应改变观测）。
+		runner.expect(result_plain.observations.size() == result_debug.observations.size(),
+		              "observations count should be identical with/without debug");
+
+		const std::size_t observation_count = std::min(result_plain.observations.size(),
+		                                               result_debug.observations.size());
+
+		for(std::size_t i = 0; i < observation_count; ++i)
+		{
+			const auto& lhs_observation = result_plain.observations[i];
+			const auto& rhs_observation = result_debug.observations[i];
+
+			runner.expect(lhs_observation.source_detection_index
+			                  == rhs_observation.source_detection_index,
+			              "observation source_detection_index should be identical");
+			runner.expect(std::abs(lhs_observation.timestamp_s - rhs_observation.timestamp_s)
+			                  < 1e-12,
+			              "observation timestamp should be identical");
+
+			const double gimbal_error =
+			    (lhs_observation.position_in_gimbal - rhs_observation.position_in_gimbal).norm();
+			runner.expect(gimbal_error < 1e-9,
+			              "observation position_in_gimbal should be identical");
+
+			const double world_error =
+			    (lhs_observation.position_in_world - rhs_observation.position_in_world).norm();
+			runner.expect(world_error < 1e-9,
+			              "observation position_in_world should be identical");
+
+			runner.expect(std::abs(lhs_observation.armor_yaw_in_world
+			                       - rhs_observation.armor_yaw_in_world)
+			                  < 1e-9,
+			              "observation armor_yaw_in_world should be identical");
 		}
 
 		// 近目标（原始顺序 index 1）应被选中，且 debug 下标指向同一块装甲板。

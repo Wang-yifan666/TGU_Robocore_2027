@@ -3,7 +3,7 @@
  * @brief 自瞄算法 facade / orchestrator（pre-tracker 阶段）。
  *
  * 本阶段职责：
- *   Detector -> 预跟踪确定性目标选择 -> Solver -> AimResult
+ *   Detector -> Solver(all) -> ArmorObservation[] -> pre-tracker compatibility selection -> AimResult
  *
  * 不负责：
  * - 读取 TOML 配置；

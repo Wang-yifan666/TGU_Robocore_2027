@@ -57,8 +57,9 @@ namespace app::auto_aim
 		/**
 		 * @brief pre-tracker 确定性候选排序（临时策略）。
 		 *
-		 * 对完整候选 index 按同一个 comparator 整体 stable_sort，
-		 * 之后所有 fallback 候选严格按该顺序尝试 PnP。
+		 * 仅对成功 PnP 集合排序，用于选出第一个兼容 target。
+		 * 不再控制 PnP 的调用顺序：PnP 现在按 Detector 原始顺序全量求解，
+		 * 排序结果只决定从 solved 集合中选择哪一个作为 AimResult::target。
 		 *
 		 * 排序关键字：
 		 *   第一关键字：ArmorPriority，数字越小优先级越高；
