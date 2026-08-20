@@ -29,6 +29,7 @@
 #include "app/auto_aim/armor.hpp"
 #include "app/auto_aim/detector/detector.hpp"
 #include "app/auto_aim/solver.hpp"
+#include "app/auto_aim/tracker_types.hpp"
 #include "app/auto_aim/types.hpp"
 
 namespace app::auto_aim
@@ -76,6 +77,15 @@ namespace app::auto_aim
 		Armor target;
 
 		/**
+		 * @brief 本帧所有成功完成 PnP 解算的装甲板观测。
+		 *
+		 * 顺序与 Detector 原始输出（NMS 后）一致，只包含 Solver 成功的
+		 * detection；单个 PnP 失败不会阻止其它候选进入本列表。
+		 * Tracker 后续只消费本列表，不依赖 target / Armor / cv::Mat。
+		 */
+		std::vector<ArmorObservation> observations;
+
+		/**
 		 * @brief raw geometric line-of-sight observation，NOT final ballistic compensated command。
 		 *
 		 * 本阶段不定义云台控制命令语义，因此 yaw / pitch 保持默认 0；
@@ -118,6 +128,20 @@ namespace app::auto_aim
 		 * 无成功目标（NoTarget / NoFrame / Error）时保持空。
 		 */
 		std::optional<std::size_t> selected_armor_index;
+
+		/**
+		 * @brief 本帧所有 PnP 成功的 detection 下标（Detector 原始 index）。
+		 *
+		 * 语义：
+		 * - 只记录 Solver 成功的 detection；
+		 * - 顺序与 AimResult::observations 一致，且逐项满足
+		 *   solved_armor_indices[i] == observations[i].source_detection_index；
+		 * - 每帧通过 *debug = AutoAimDebugData{} 自动清空。
+		 *
+		 * 与 selected_armor_index 不同：solved_armor_indices 是成功集合，
+		 * selected_armor_index 是 pre-tracker 最终选择。
+		 */
+		std::vector<std::size_t> solved_armor_indices;
 
 		double inference_time_ms = 0.0;
 		double postprocess_time_ms = 0.0;

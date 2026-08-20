@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <numeric>
 #include <utility>
 #include <vector>
@@ -18,6 +19,40 @@ namespace app::auto_aim
 	{
 
 		constexpr std::string_view kLogModule = "AUTO_AIM";
+
+		/**
+		 * @brief 从已完成 PnP 解算的 Armor 构造 Tracker 观测。
+		 *
+		 * 纯转换 helper：只负责复制 Solver 已完成的数据；不调 Solver、
+		 * 不做 association / filtering、不获取系统时间、不修改 Armor。
+		 *
+		 * @param armor 已由 Solver 成功填充 3D 字段的装甲板。
+		 * @param timestamp_s 来自 FrameContext 的时间戳。
+		 * @param source_detection_index 原始 detection 下标（Detector NMS 后顺序）。
+		 */
+		ArmorObservation make_observation(const Armor& armor, double timestamp_s,
+		                                  std::size_t source_detection_index)
+		{
+			ArmorObservation observation;
+
+			observation.color = armor.color;
+			observation.name = armor.name;
+			observation.type = armor.type;
+			observation.priority = armor.priority;
+
+			observation.confidence = armor.confidence;
+
+			observation.position_in_gimbal = armor.xyz_in_gimbal;
+			observation.position_in_world = armor.xyz_in_world;
+
+			observation.ypd_in_world = armor.ypd_in_world;
+			observation.armor_yaw_in_world = armor.ypr_in_world.x();
+
+			observation.timestamp_s = timestamp_s;
+			observation.source_detection_index = source_detection_index;
+
+			return observation;
+		}
 
 		/**
 		 * @brief pre-tracker 确定性候选排序（临时策略）。
@@ -163,10 +198,21 @@ namespace app::auto_aim
 		const std::vector<std::size_t> order =
 		    order_candidates(detection.armors, image_center);
 
-		// ---- 3. 严格按排序后的候选顺序尝试 PnP ----
+		// ---- 3. 对所有 detection 按 Detector 原始顺序尝试 PnP ----
 		solver_.set_r_gimbal_to_world(frame.q_imu_body_to_world);
 
-		for(const std::size_t index: order)
+		result.observations.reserve(detection.armors.size());
+
+		if(debug != nullptr)
+		{
+			debug->solved_armor_indices.reserve(detection.armors.size());
+		}
+
+		// 记录每个原始 index 是否 PnP 成功。使用 uint8_t 而非 vector<bool>，
+		// 避免 vector<bool> 的位域/引用特殊语义。
+		std::vector<std::uint8_t> solved(detection.armors.size(), 0U);
+
+		for(std::size_t index = 0; index < detection.armors.size(); ++index)
 		{
 			Armor& candidate = detection.armors[index];
 
@@ -177,9 +223,30 @@ namespace app::auto_aim
 				continue;
 			}
 
-			// 单个 PnP 几何失败不视为全局错误，继续尝试下一候选。
+			// 单个 PnP 几何失败不视为全局错误，继续处理下一候选。
+			solved[index] = 1U;
+
 			// index 是 detection.armors（即 debug.detected_armors）的原始下标，
 			// 不是 order_candidates() 排序后的 rank。
+			result.observations.push_back(
+			    make_observation(candidate, frame.timestamp_s, index));
+
+			if(debug != nullptr)
+			{
+				debug->solved_armor_indices.push_back(index);
+			}
+		}
+
+		// ---- 4. pre-tracker 兼容目标选择：只从 PnP 成功集合中选择 ----
+		for(const std::size_t index: order)
+		{
+			if(solved[index] == 0U)
+			{
+				continue;
+			}
+
+			Armor& candidate = detection.armors[index];
+
 			if(debug != nullptr)
 			{
 				debug->selected_armor_index = index;

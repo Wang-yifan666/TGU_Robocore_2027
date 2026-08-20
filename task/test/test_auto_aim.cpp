@@ -297,6 +297,11 @@ namespace
 		return std::isfinite(point.x) && std::isfinite(point.y);
 	}
 
+	bool is_finite_vector3(const Eigen::Vector3d& vector)
+	{
+		return std::isfinite(vector.x()) && std::isfinite(vector.y()) && std::isfinite(vector.z());
+	}
+
 	// 靠近图像中心 (640, 360) 的直立小装甲板。
 	const std::array<cv::Point2f, 4> kNearKeypoints = {{
 	    cv::Point2f{600.0F, 340.0F}, cv::Point2f{680.0F, 340.0F}, cv::Point2f{680.0F, 400.0F},
@@ -665,6 +670,8 @@ namespace
 			runner.expect(debug.detected_armors.empty(), "Error path must clear detected_armors");
 			runner.expect(!debug.selected_armor_index.has_value(),
 			              "Error path must clear selected_armor_index");
+			runner.expect(debug.solved_armor_indices.empty(),
+			              "Error path must clear solved_armor_indices");
 			runner.expect(debug.inference_time_ms == 0.0 && debug.postprocess_time_ms == 0.0,
 			              "Error path must clear timing");
 		}
@@ -686,9 +693,144 @@ namespace
 			runner.expect(debug.detected_armors.empty(), "NoFrame path must clear detected_armors");
 			runner.expect(!debug.selected_armor_index.has_value(),
 			              "NoFrame path must clear selected_armor_index");
+			runner.expect(debug.solved_armor_indices.empty(),
+			              "NoFrame path must clear solved_armor_indices");
 			runner.expect(debug.inference_time_ms == 0.0 && debug.postprocess_time_ms == 0.0,
 			              "NoFrame path must clear timing");
 		}
+
+		runner.end();
+	}
+
+	// ============================================================
+	// 测试：单 observation（1 个 detection，PnP 成功）
+	// ============================================================
+
+	void test_single_observation(TestRunner& runner)
+	{
+		runner.begin("Single observation");
+
+		auto auto_aim = build_auto_aim({make_valid_blue_three(kNearKeypoints)},
+		                               make_valid_solver_config());
+
+		auto_aim::FrameContext frame;
+		frame.image = make_test_image();
+		frame.timestamp_s = 12.345;
+
+		auto_aim::AutoAimDebugData debug;
+		const auto result = auto_aim.process(frame, &debug);
+
+		runner.expect(result.state == auto_aim::AimState::Detecting,
+		              "Single detection should produce Detecting state");
+		runner.expect(result.observations.size() == 1,
+		              "Single successful PnP should produce exactly one observation");
+
+		if(!result.observations.empty())
+		{
+			const auto& observation = result.observations[0];
+
+			runner.expect(observation.source_detection_index == 0,
+			              "Single observation should trace to detection index 0");
+			runner.expect(observation.timestamp_s == 12.345,
+			              "Observation timestamp should come from FrameContext (not default 0)");
+			runner.expect(observation.name == auto_aim::ArmorName::Three,
+			              "Observation name should be three");
+			runner.expect(observation.type == auto_aim::ArmorType::Small,
+			              "Observation type should be small");
+			runner.expect(observation.color == auto_aim::ArmorColor::Blue,
+			              "Observation color should be blue");
+
+			runner.expect(std::abs(observation.confidence - 0.90F) < 1e-6,
+			              "Observation confidence should match detection confidence");
+
+			runner.expect(is_finite_vector3(observation.position_in_gimbal),
+			              "Observation position_in_gimbal should be finite");
+			runner.expect(is_finite_vector3(observation.position_in_world),
+			              "Observation position_in_world should be finite");
+			runner.expect(is_finite_vector3(observation.ypd_in_world),
+			              "Observation ypd_in_world should be finite");
+			runner.expect(std::isfinite(observation.armor_yaw_in_world),
+			              "Observation armor_yaw_in_world should be finite");
+		}
+
+		runner.end();
+	}
+
+	// ============================================================
+	// 测试：多 observation（2 个 detection，全部 PnP 成功）
+	// ============================================================
+
+	void test_multiple_observations(TestRunner& runner)
+	{
+		runner.begin("Multiple observations");
+
+		// 输入顺序：far(0), near(1)。
+		auto auto_aim = build_auto_aim(
+		    {make_valid_blue_three(kFarKeypoints), make_valid_blue_three(kNearKeypoints)},
+		    make_valid_solver_config());
+
+		auto_aim::FrameContext frame;
+		frame.image = make_test_image();
+		frame.timestamp_s = 7.25;
+
+		auto_aim::AutoAimDebugData debug;
+		const auto result = auto_aim.process(frame, &debug);
+
+		runner.expect(result.state == auto_aim::AimState::Detecting,
+		              "Multiple detections should produce Detecting state");
+		runner.expect(result.observations.size() == 2,
+		              "Two successful PnP detections should produce two observations");
+
+		if(result.observations.size() == 2)
+		{
+			// observations 保持 Detector 原始顺序（远在前、近在后）。
+			runner.expect(result.observations[0].source_detection_index == 0,
+			              "First observation should trace to detection index 0 (far)");
+			runner.expect(result.observations[1].source_detection_index == 1,
+			              "Second observation should trace to detection index 1 (near)");
+
+			for(const auto& observation: result.observations)
+			{
+				runner.expect(is_finite_vector3(observation.position_in_gimbal),
+				              "Each observation position_in_gimbal should be finite");
+				runner.expect(std::isfinite(observation.armor_yaw_in_world),
+				              "Each observation armor_yaw_in_world should be finite");
+			}
+		}
+
+		// observation 顺序 != pre-tracker target 选择顺序：
+		// observations[0] 是远目标(index 0)，而 target 选择近目标(index 1)。
+		runner.expect(debug.selected_armor_index.has_value()
+		                  && *debug.selected_armor_index == 1,
+		              "Pre-tracker target selection should still pick near armor (index 1)");
+
+		if(result.has_target)
+		{
+			const cv::Point2f expected_near_center(640.0F, 370.0F);
+			runner.expect(cv::norm(result.target.center - expected_near_center) < 1e-3,
+			              "Selected target should still be closer-to-center armor");
+		}
+
+		// ---- debug invariant：solved_armor_indices 与 observations 一致 ----
+		runner.expect(debug.solved_armor_indices.size() == result.observations.size(),
+		              "solved_armor_indices size should equal observations size");
+
+		const std::size_t count = std::min(debug.solved_armor_indices.size(),
+		                                   result.observations.size());
+
+		bool indices_match = true;
+
+		for(std::size_t i = 0; i < count; ++i)
+		{
+			if(debug.solved_armor_indices[i] != result.observations[i].source_detection_index)
+			{
+				indices_match = false;
+				break;
+			}
+		}
+
+		runner.expect(indices_match,
+		              "solved_armor_indices should match observations source_detection_index");
 
 		runner.end();
 	}
@@ -723,15 +865,23 @@ namespace
 		              "First frame debug should expose the detected armor");
 		runner.expect(debug.selected_armor_index.has_value(),
 		              "First frame debug should record selected index");
+		runner.expect(result_first.observations.size() == 1,
+		              "First frame should produce one observation");
+		runner.expect(debug.solved_armor_indices.size() == 1,
+		              "First frame debug should record one solved index");
 
 		const auto result_second = auto_aim.process(frame, &debug);
 
 		runner.expect(result_second.state == auto_aim::AimState::NoTarget,
 		              "Second frame without detection should be NoTarget");
+		runner.expect(result_second.observations.empty(),
+		              "Second frame result must not retain previous frame observations");
 		runner.expect(debug.detected_armors.empty(),
 		              "Second frame must not retain previous frame armors");
 		runner.expect(!debug.selected_armor_index.has_value(),
 		              "Second frame must not retain previous frame selected index");
+		runner.expect(debug.solved_armor_indices.empty(),
+		              "Second frame must not retain previous frame solved indices");
 
 		// NoTarget 帧仍然执行了 detect()，因此 timing 是当前帧的全新数据
 		// （允许非零），而不是上一帧的残留；残留只针对 armors / index。
@@ -762,6 +912,8 @@ int main()
 	test_degenerate_solver_not_ready(runner);
 	test_reset_frame_counter(runner);
 	test_debug_behavior_equivalence(runner);
+	test_single_observation(runner);
+	test_multiple_observations(runner);
 	test_debug_lifecycle_early_return(runner);
 	test_debug_lifecycle_no_residue(runner);
 
