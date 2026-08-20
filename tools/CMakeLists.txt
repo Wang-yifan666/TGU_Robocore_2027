@@ -1,5 +1,6 @@
 add_library(tools STATIC
     crc.cpp
+    extended_kalman_filter.cpp
     img_tools.cpp
     logger.cpp
     logger_config_loader.cpp
