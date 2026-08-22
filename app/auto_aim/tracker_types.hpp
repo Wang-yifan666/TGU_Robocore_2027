@@ -16,6 +16,8 @@
 
 #include <cstddef>
 #include <limits>
+#include <optional>
+#include <vector>
 
 #include <Eigen/Core>
 
@@ -96,6 +98,55 @@ namespace app::auto_aim
 		int armor_id = 0;
 		Eigen::Vector3d position_in_world = Eigen::Vector3d::Zero();
 		double yaw_in_world = 0.0;
+	};
+
+	/**
+	 * @brief Tracker 生命周期状态。
+	 */
+	enum class TrackerState : std::uint8_t
+	{
+		Lost = 0,
+		Detecting,
+		Tracking,
+		TempLost
+	};
+
+	/**
+	 * @brief Tracker 输出的稳定跟踪结果（车辆级，非可见装甲板）。
+	 */
+	struct TrackedTarget
+	{
+		TrackerState state = TrackerState::Lost;
+
+		/// 本帧是否有 successful measurement（correction 成功）。
+		/// false 时 innovation / nis / matched_* 均为 nullopt，
+		/// 即使 EKF 内部存在 stale last_nis 也不输出。
+		bool has_measurement = false;
+
+		double timestamp_s = 0.0;
+
+		ArmorColor color = ArmorColor::Unknown;
+		ArmorName name = ArmorName::NotArmor;
+		ArmorType type = ArmorType::Unknown;
+		ArmorPriority priority = ArmorPriority::Unknown;
+
+		Eigen::Vector3d center_in_world = Eigen::Vector3d::Zero();
+		Eigen::Vector3d velocity_in_world = Eigen::Vector3d::Zero();
+
+		double yaw = 0.0;
+		double yaw_rate = 0.0;
+
+		double radius = 0.0;
+		double delta_radius = 0.0;
+		double delta_z = 0.0;
+
+		std::vector<ArmorHypothesis> predicted_armors;
+
+		std::optional<std::size_t> matched_observation_index;
+		std::optional<int> matched_armor_id;
+
+		std::optional<Eigen::VectorXd> innovation;
+		std::optional<double> nis;
 	};
 
 } // namespace app::auto_aim

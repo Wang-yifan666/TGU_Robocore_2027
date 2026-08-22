@@ -11,6 +11,7 @@ add_test(NAME test_solver_config COMMAND test_solver_config)
 add_test(NAME test_extended_kalman_filter COMMAND test_extended_kalman_filter)
 add_test(NAME test_target COMMAND test_target)
 add_test(NAME test_association COMMAND test_association)
+add_test(NAME test_tracker COMMAND test_tracker)
 
 add_executable(sentry sentry.cpp)
 add_executable(read_toml test/read_toml.cpp)
@@ -30,6 +31,7 @@ add_executable(test_solver_config test/test_solver_config.cpp)
 add_executable(test_extended_kalman_filter test/test_extended_kalman_filter.cpp)
 add_executable(test_target test/test_target.cpp)
 add_executable(test_association test/test_association.cpp)
+add_executable(test_tracker test/test_tracker.cpp)
 add_executable(test_all_pipeline test/test_all_pipeline.cpp)
 
 target_compile_definitions(test_logger PRIVATE
@@ -158,6 +160,13 @@ target_link_libraries(test_target PRIVATE
 )
 
 target_link_libraries(test_association PRIVATE
+    app
+    tools
+    ${OpenCV_LIBS}
+    Eigen3::Eigen
+)
+
+target_link_libraries(test_tracker PRIVATE
     app
     tools
     ${OpenCV_LIBS}
