@@ -85,6 +85,19 @@ namespace app::auto_aim
 		std::size_t source_detection_index = std::numeric_limits<std::size_t>::max();
 	};
 
+	/**
+	 * @brief 由 Target 车辆模型生成的一块预测装甲板假设。
+	 *
+	 * 纯几何输出，不含 bbox / keypoints / cv::Mat。
+	 * armor_id 表示该装甲板在车辆上的固定编号（0..armor_count-1）。
+	 */
+	struct ArmorHypothesis
+	{
+		int armor_id = 0;
+		Eigen::Vector3d position_in_world = Eigen::Vector3d::Zero();
+		double yaw_in_world = 0.0;
+	};
+
 } // namespace app::auto_aim
 
 #endif // TGU_ROBOCORE_2027_AUTO_AIM_TRACKER_TYPES_HPP
