@@ -160,6 +160,36 @@ namespace app::auto_aim
 		Eigen::MatrixXd measurement_jacobian(const Eigen::VectorXd& x, int armor_id) const;
 
 		/**
+		 * @brief 使用给定 armor_id 对观测做测量更新。
+		 *
+		 * 测量：[x, y, z, yaw]，使用 measurement_model / measurement_jacobian。
+		 * yaw residual 通过 EKF residual hook wrap。
+		 *
+		 * @param observation 完成三维解算的装甲板观测。
+		 * @param armor_id 匹配的装甲板编号。
+		 * @param measurement_covariance 4x4 测量协方差（由 config 明确提供）。
+		 *
+		 * @return true 更新成功；false 数值失败（state/covariance 保持 prior）。
+		 * @throw std::invalid_argument 输入非法 / 协方差 shape 非法 / armor_id 越界。
+		 */
+		bool correct(const ArmorObservation& observation, int armor_id,
+		             const Eigen::MatrixXd& measurement_covariance);
+
+		/**
+		 * @brief 最近一次 successful correction 的 prior innovation（4 维）。
+		 *
+		 * 无 successful correction 时为空 vector。
+		 */
+		const Eigen::VectorXd& last_innovation() const noexcept;
+
+		/**
+		 * @brief 最近一次 successful correction 的 prior NIS。
+		 *
+		 * 无 successful correction 时为 NaN。
+		 */
+		double last_nis() const noexcept;
+
+		/**
 		 * @brief 当前后验状态（11 维）。
 		 */
 		const Eigen::VectorXd& state() const noexcept;

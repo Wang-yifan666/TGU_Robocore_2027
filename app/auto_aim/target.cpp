@@ -242,6 +242,57 @@ namespace app::auto_aim
 		return z;
 	}
 
+	bool Target::correct(const ArmorObservation& observation, int armor_id,
+	                     const Eigen::MatrixXd& measurement_covariance)
+	{
+		if(armor_id < 0 || armor_id >= armor_count_)
+		{
+			throw std::invalid_argument("armor_id out of range");
+		}
+
+		if(!observation.position_in_world.allFinite())
+		{
+			throw std::invalid_argument("observation position_in_world must be finite");
+		}
+
+		if(!std::isfinite(observation.armor_yaw_in_world))
+		{
+			throw std::invalid_argument("observation armor_yaw_in_world must be finite");
+		}
+
+		if(measurement_covariance.rows() != kTargetMeasurementDim
+		   || measurement_covariance.cols() != kTargetMeasurementDim)
+		{
+			throw std::invalid_argument("measurement_covariance must be 4x4");
+		}
+
+		const Eigen::VectorXd& x_prior = ekf_->state();
+
+		const Eigen::MatrixXd H = measurement_jacobian(x_prior, armor_id);
+
+		auto h = [this, armor_id](const Eigen::VectorXd& x) {
+			return this->measurement_model(x, armor_id);
+		};
+
+		Eigen::VectorXd z(kTargetMeasurementDim);
+		z(0) = observation.position_in_world.x();
+		z(1) = observation.position_in_world.y();
+		z(2) = observation.position_in_world.z();
+		z(3) = observation.armor_yaw_in_world;
+
+		return ekf_->update(z, H, measurement_covariance, h);
+	}
+
+	const Eigen::VectorXd& Target::last_innovation() const noexcept
+	{
+		return ekf_->last_innovation();
+	}
+
+	double Target::last_nis() const noexcept
+	{
+		return ekf_->last_nis();
+	}
+
 	Eigen::MatrixXd Target::measurement_jacobian(const Eigen::VectorXd& x, int armor_id) const
 	{
 		const ArmorGeometry g = geometry(x, armor_id);
