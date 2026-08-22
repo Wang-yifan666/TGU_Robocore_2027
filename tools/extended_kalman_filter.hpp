@@ -75,7 +75,8 @@ namespace tools
 		/**
 		 * @brief 初始化状态与协方差，并绑定状态加法与残差 hook。
 		 *
-		 * @throw std::invalid_argument x0/P0 维度非法、非有限或 P0 非近似对称。
+		 * @throw std::invalid_argument x0/P0 维度非法、非有限或 P0 非近似对称；
+		 *        或传入空的 state_add / residual。
 		 */
 		ExtendedKalmanFilter(
 		    const Eigen::VectorXd& x0, const Eigen::MatrixXd& P0,
@@ -173,6 +174,11 @@ namespace tools
 	private:
 		bool update_impl(const Eigen::VectorXd& z, const Eigen::MatrixXd& H,
 		                 const Eigen::MatrixXd& R, const StateFn& h);
+
+		// 共享 predict 尾部：计算 F P F^T + Q、验有限、对称化、commit x_next/P_。
+		// 前提：F/Q/x_next 均已通过前置校验。
+		void predict_commit(Eigen::VectorXd x_next, const Eigen::MatrixXd& F,
+		                    const Eigen::MatrixXd& Q);
 
 		Eigen::VectorXd x_;
 		Eigen::MatrixXd P_;

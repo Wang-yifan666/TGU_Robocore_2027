@@ -382,6 +382,12 @@ namespace
 		runner.expect(near(ekf.last_innovation()(0), 0.02, 1e-6),
 		              "wrapped residual is ~0.02 rad");
 
+		// 校正实际使用 wrapped +0.02，而不是裸 -2pi + 0.02：
+		// K = 0.5, correction = 0.01, x_post = (pi - 0.01) + 0.01 = pi。
+		// 若错误使用约 -2pi 的裸残差，posterior 会趋近 0。
+		runner.expect(near(ekf.state()(0), kPi, 1e-9),
+		              "posterior used wrapped +0.02 residual (state == pi)");
+
 		runner.end();
 	}
 
@@ -676,6 +682,248 @@ namespace
 		runner.end();
 	}
 
+	// ============================================================
+	// Test：linear predict arithmetic failure（F*x 溢出）
+	// ============================================================
+
+	void test_linear_predict_arithmetic_failure(TestRunner& runner)
+	{
+		runner.begin("Linear predict arithmetic failure");
+
+		// 全部输入合法 finite：x0=[1e308], P0=[1], F=[1e308], Q=[0]。
+		// F*x = 1e308*1e308 = +inf，是内部算术溢出（非 callback 错误）。
+		Eigen::VectorXd x0(1);
+		x0 << 1e308;
+
+		Eigen::MatrixXd p0 = mat11(1.0);
+		Eigen::MatrixXd F = mat11(1e308);
+		Eigen::MatrixXd Q = mat11(0.0);
+
+		tools::ExtendedKalmanFilter ekf(x0, p0);
+
+		bool threw_runtime = false;
+		bool threw_invalid = false;
+
+		try
+		{
+			ekf.predict(F, Q);
+		}
+		catch(const std::runtime_error&)
+		{
+			threw_runtime = true;
+		}
+		catch(const std::invalid_argument&)
+		{
+			threw_invalid = true;
+		}
+
+		runner.expect(threw_runtime, "linear overflow throws runtime_error");
+		runner.expect(!threw_invalid, "linear overflow does not throw invalid_argument");
+
+		// 完整 rollback：state/covariance/diagnostics 全不变。
+		runner.expect(vec_near(ekf.state(), x0), "state unchanged after overflow");
+		runner.expect(mat_near(ekf.covariance(), p0), "covariance unchanged after overflow");
+		runner.expect(ekf.last_innovation().size() == 0,
+		              "last_innovation unchanged after overflow");
+		runner.expect(std::isnan(ekf.last_nis()), "last_nis unchanged after overflow (NaN)");
+
+		runner.end();
+	}
+
+	// ============================================================
+	// Test：nonlinear callback bad output 仍为 invalid_argument
+	// ============================================================
+
+	void test_nonlinear_predict_callback_bad_output(TestRunner& runner)
+	{
+		runner.begin("Nonlinear predict callback bad output");
+
+		Eigen::VectorXd x0(2);
+		x0 << 0.0, 0.0;
+
+		Eigen::MatrixXd p0 = Eigen::MatrixXd::Identity(2, 2);
+		Eigen::MatrixXd F = Eigen::MatrixXd::Identity(2, 2);
+		Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(2, 2);
+
+		auto bad_f = [](const Eigen::VectorXd&) {
+			Eigen::VectorXd y(2);
+			y << std::numeric_limits<double>::quiet_NaN(), 0.0;
+			return y;
+		};
+
+		tools::ExtendedKalmanFilter ekf(x0, p0);
+
+		bool threw_invalid = false;
+
+		try
+		{
+			ekf.predict(F, Q, bad_f);
+		}
+		catch(const std::invalid_argument&)
+		{
+			threw_invalid = true;
+		}
+
+		runner.expect(threw_invalid,
+		              "nonlinear f() returning NaN throws invalid_argument");
+
+		runner.end();
+	}
+
+	// ============================================================
+	// Test：diagnostics 在成功 update -> predict 后保留
+	// ============================================================
+
+	void test_diagnostics_retained_after_predict(TestRunner& runner)
+	{
+		runner.begin("Diagnostics retained after predict");
+
+		tools::ExtendedKalmanFilter ekf(vec1(0.0), mat11(1.0));
+
+		// 成功 update：innovation=1, NIS=0.5。
+		const bool ok = ekf.update(vec1(1.0), mat11(1.0), mat11(1.0));
+		runner.expect(ok, "initial update succeeds");
+
+		// predict 不应刷新 diagnostics。
+		ekf.predict(mat11(1.0), mat11(0.1));
+
+		runner.expect(ekf.last_innovation().size() == 1,
+		              "last_innovation retained after predict");
+		runner.expect(near(ekf.last_innovation()(0), 1.0),
+		              "innovation value retained after predict");
+		runner.expect(near(ekf.last_nis(), 0.5), "NIS retained after predict");
+
+		runner.end();
+	}
+
+	// ============================================================
+	// Test：成功 update -> 失败 update 后 diagnostics 完整保留
+	// ============================================================
+
+	void test_diagnostics_retained_after_failed_update(TestRunner& runner)
+	{
+		runner.begin("Diagnostics retained after failed update");
+
+		Eigen::VectorXd x0(2);
+		x0 << 0.0, 0.0;
+
+		Eigen::MatrixXd p0 = Eigen::MatrixXd::Identity(2, 2);
+
+		Eigen::MatrixXd H_good(1, 2);
+		H_good << 1.0, 0.0;
+
+		tools::ExtendedKalmanFilter ekf(x0, p0);
+
+		// 成功 update（H=[1,0], R=[1], z=[1]）→ P=[[0.5,0],[0,1]], innov=[1], NIS=0.5。
+		const bool ok = ekf.update(vec1(1.0), H_good, mat11(1.0));
+		runner.expect(ok, "good update succeeds");
+
+		const Eigen::VectorXd good_state = ekf.state();
+		const Eigen::MatrixXd good_covariance = ekf.covariance();
+		const Eigen::VectorXd good_innovation = ekf.last_innovation();
+		const double good_nis = ekf.last_nis();
+
+		// 失败的 update：S = [[1.5,0],[0,0]] 奇异。
+		Eigen::VectorXd z_bad(2);
+		z_bad << 1.0, 1.0;
+
+		Eigen::MatrixXd H_bad(2, 2);
+		H_bad << 1.0, 0.0, 0.0, 0.0;
+
+		Eigen::MatrixXd R_bad = Eigen::MatrixXd::Zero(2, 2);
+		R_bad(0, 0) = 1.0;
+
+		const bool bad_ok = ekf.update(z_bad, H_bad, R_bad);
+
+		runner.expect(!bad_ok, "singular-S update returns false");
+		runner.expect(vec_near(ekf.state(), good_state),
+		              "state retains previous successful update");
+		runner.expect(mat_near(ekf.covariance(), good_covariance),
+		              "covariance retains previous successful update");
+		runner.expect(ekf.last_innovation().size() == good_innovation.size(),
+		              "last_innovation size unchanged");
+		runner.expect(
+		    good_innovation.size() == 0
+		        || near(ekf.last_innovation()(0), good_innovation(0)),
+		    "last_innovation value unchanged");
+		runner.expect(near(ekf.last_nis(), good_nis), "NIS unchanged");
+
+		runner.end();
+	}
+
+	// ============================================================
+	// Test：空 callback 在构造阶段被拒绝
+	// ============================================================
+
+	void test_callback_callability(TestRunner& runner)
+	{
+		runner.begin("Callback callability");
+
+		Eigen::VectorXd x0(2);
+		x0 << 0.0, 0.0;
+
+		Eigen::MatrixXd p0 = Eigen::MatrixXd::Identity(2, 2);
+
+		// 空 state_add 立即 invalid_argument。
+		{
+			bool threw = false;
+
+			try
+			{
+				tools::ExtendedKalmanFilter ekf(
+				    x0, p0, tools::ExtendedKalmanFilter::StateAddFn{},
+				    [](const Eigen::VectorXd& a, const Eigen::VectorXd& b) {
+					    return a + b;
+				    });
+			}
+			catch(const std::invalid_argument&)
+			{
+				threw = true;
+			}
+
+			runner.expect(threw, "empty state_add throws invalid_argument at construction");
+		}
+
+		// 空 residual 立即 invalid_argument。
+		{
+			bool threw = false;
+
+			try
+			{
+				tools::ExtendedKalmanFilter ekf(
+				    x0, p0,
+				    [](const Eigen::VectorXd& a, const Eigen::VectorXd& b) {
+					    return a + b;
+				    },
+				    tools::ExtendedKalmanFilter::ResidualFn{});
+			}
+			catch(const std::invalid_argument&)
+			{
+				threw = true;
+			}
+
+			runner.expect(threw, "empty residual throws invalid_argument at construction");
+		}
+
+		// 默认 callback 仍正常。
+		{
+			bool threw = false;
+
+			try
+			{
+				tools::ExtendedKalmanFilter ekf(x0, p0);
+			}
+			catch(...)
+			{
+				threw = true;
+			}
+
+			runner.expect(!threw, "default callbacks still construct successfully");
+		}
+
+		runner.end();
+	}
+
 } // namespace
 
 int main()
@@ -696,6 +944,11 @@ int main()
 	test_dimension_mismatch(runner);
 	test_nis(runner);
 	test_numerical_failure(runner);
+	test_linear_predict_arithmetic_failure(runner);
+	test_nonlinear_predict_callback_bad_output(runner);
+	test_diagnostics_retained_after_predict(runner);
+	test_diagnostics_retained_after_failed_update(runner);
+	test_callback_callability(runner);
 
 	runner.print_summary();
 

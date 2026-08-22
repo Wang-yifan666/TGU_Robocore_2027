@@ -1,6 +1,7 @@
 # test
 # 分组注册 CTest：快速、稳定、无硬件/真实视频依赖的单元测试。
-# test_auto_aim_pipeline（真实 OpenVINO + demo.avi）保持手动运行，不注册。
+# test_auto_aim_pipeline / test_all_pipeline（真实 OpenVINO + demo.avi）
+# 保持手动 integration/replay test，不注册进默认 CTest。
 add_test(NAME test_solver COMMAND test_solver)
 add_test(NAME test_detector COMMAND test_detector)
 add_test(NAME test_openvino_inference COMMAND test_openvino_inference)
@@ -8,7 +9,6 @@ add_test(NAME test_auto_aim COMMAND test_auto_aim)
 add_test(NAME test_armor COMMAND test_armor)
 add_test(NAME test_solver_config COMMAND test_solver_config)
 add_test(NAME test_extended_kalman_filter COMMAND test_extended_kalman_filter)
-add_test(NAME test_all_pipeline COMMAND test_all_pipeline)
 
 add_executable(sentry sentry.cpp)
 add_executable(read_toml test/read_toml.cpp)

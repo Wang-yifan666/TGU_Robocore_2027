@@ -103,6 +103,16 @@ namespace tools
 	                                           StateAddFn state_add, ResidualFn residual):
 	state_add_(std::move(state_add)), residual_(std::move(residual))
 	{
+		if(!state_add_)
+		{
+			throw std::invalid_argument("state_add must be callable");
+		}
+
+		if(!residual_)
+		{
+			throw std::invalid_argument("residual must be callable");
+		}
+
 		reset(x0, P0);
 	}
 
@@ -126,9 +136,25 @@ namespace tools
 
 	void ExtendedKalmanFilter::predict(const Eigen::MatrixXd& F, const Eigen::MatrixXd& Q)
 	{
-		predict(F, Q, [&F](const Eigen::VectorXd& x) {
-			return F * x;
-		});
+		const Eigen::Index n = x_.size();
+
+		if(!is_square(F, n) || !all_finite(F))
+		{
+			throw std::invalid_argument("F must be (n x n) and finite");
+		}
+
+		validate_covariance(Q, n, "Q");
+
+		// 内部线性算术 F*x。若因 overflow 产生 non-finite，
+		// 属 numerical failure，抛 runtime_error 且状态/协方差不变。
+		Eigen::VectorXd x_next = F * x_;
+
+		if(!all_finite(x_next))
+		{
+			throw std::runtime_error("linear predict produced non-finite state");
+		}
+
+		predict_commit(std::move(x_next), F, Q);
 	}
 
 	void ExtendedKalmanFilter::predict(const Eigen::MatrixXd& F, const Eigen::MatrixXd& Q,
@@ -148,10 +174,17 @@ namespace tools
 			throw std::invalid_argument("f must be callable");
 		}
 
-		// 在 x_prior 处求值 f 与 Jacobian F。
+		// 在 x_prior 处求值 f。若 f() 返回维度非法/NaN/Inf，
+		// 属 callback contract error，抛 invalid_argument。
 		Eigen::VectorXd x_next = f(x_);
 		validate_state(x_next, n);
 
+		predict_commit(std::move(x_next), F, Q);
+	}
+
+	void ExtendedKalmanFilter::predict_commit(Eigen::VectorXd x_next, const Eigen::MatrixXd& F,
+	                                          const Eigen::MatrixXd& Q)
+	{
 		Eigen::MatrixXd p_next = F * P_ * F.transpose() + Q;
 
 		if(!all_finite(p_next))
@@ -250,7 +283,16 @@ namespace tools
 		}
 
 		// ---- 计算 posterior ----
+		// correction = K * innovation 属内部数值运算。
+		// 若 non-finite，是 numerical failure（非 callback contract error），
+		// 返回 false 并完整 rollback。
 		Eigen::VectorXd correction = K * innovation;
+
+		if(!all_finite(correction))
+		{
+			return false;
+		}
+
 		Eigen::VectorXd x_post = state_add_(x_prior, correction);
 		validate_state(x_post, n);
 
