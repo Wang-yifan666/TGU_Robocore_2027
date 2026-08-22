@@ -33,6 +33,7 @@ add_executable(test_target test/test_target.cpp)
 add_executable(test_association test/test_association.cpp)
 add_executable(test_tracker test/test_tracker.cpp)
 add_executable(test_tracker_replay test/test_tracker_replay.cpp)
+add_executable(test_tracker_visual test/test_tracker_visual.cpp)
 add_executable(test_all_pipeline test/test_all_pipeline.cpp)
 
 target_compile_definitions(test_logger PRIVATE
@@ -174,6 +175,10 @@ target_link_libraries(test_tracker PRIVATE
     Eigen3::Eigen
 )
 
+target_compile_definitions(test_tracker_visual PRIVATE
+    PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+)
+
 target_compile_definitions(test_tracker_replay PRIVATE
     PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
 )
@@ -183,6 +188,13 @@ target_compile_definitions(test_all_pipeline PRIVATE
 )
 
 target_link_libraries(test_tracker_replay PRIVATE
+    app
+    tools
+    ${OpenCV_LIBS}
+    Eigen3::Eigen
+)
+
+target_link_libraries(test_tracker_visual PRIVATE
     app
     tools
     ${OpenCV_LIBS}
