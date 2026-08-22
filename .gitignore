@@ -10,3 +10,4 @@ data/models/*
 
 *.txt
 *.log
+data/logs/*.csv
