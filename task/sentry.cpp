@@ -96,7 +96,8 @@ int main(int argc, char** argv)
 	app::auto_aim::SolverConfig solver_config;
 	app::auto_aim::Solver solver(solver_config);
 
-	app::auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver));
+	app::auto_aim::Tracker tracker(app::auto_aim::make_default_tracker_config());
+	app::auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver), std::move(tracker));
 
 	// 依赖未就绪时直接退出，避免每 10ms 空转刷 ERROR。
 	if(!auto_aim.is_ready())

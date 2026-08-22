@@ -36,6 +36,36 @@ namespace app::auto_aim
 		}
 	} // namespace
 
+	TrackerConfig make_default_tracker_config()
+	{
+		TrackerConfig c;
+
+		c.detecting_confirm_hits = 3;
+		c.detecting_max_misses = 3;
+		c.temp_lost_max_misses = 10;
+		c.max_dt_s = 0.5;
+
+		c.association.max_position_error_m = 0.5;
+		c.association.max_yaw_error_rad = 0.5;
+		c.association.position_score_scale_m = 1.0;
+		c.association.yaw_score_scale_rad = 1.0;
+
+		c.initial_covariance = Eigen::MatrixXd::Identity(kTargetStateDim, kTargetStateDim);
+		c.measurement_covariance =
+		    1e-4 * Eigen::MatrixXd::Identity(kTargetMeasurementDim, kTargetMeasurementDim);
+
+		c.process_noise.translation_accel_variance = 1.0;
+		c.process_noise.yaw_accel_variance = 1.0;
+		c.process_noise.radius_random_walk_variance = 1.0;
+		c.process_noise.delta_radius_random_walk_variance = 1.0;
+		c.process_noise.delta_z_random_walk_variance = 1.0;
+
+		c.min_radius_m = 0.05;
+		c.max_radius_m = 0.5;
+
+		return c;
+	}
+
 	Tracker::Tracker(const TrackerConfig& config): config_(config)
 	{
 		if(config.detecting_confirm_hits < 0 || config.detecting_max_misses < 0

@@ -273,7 +273,9 @@ namespace
 
 		auto_aim::Solver solver(solver_config);
 
-		return auto_aim::AutoAim(std::move(detector), std::move(solver));
+		auto_aim::Tracker tracker(auto_aim::make_default_tracker_config());
+
+		return auto_aim::AutoAim(std::move(detector), std::move(solver), std::move(tracker));
 	}
 
 	// 用假数据填满 debug，验证 empty-frame / error 路径会将其清空。
@@ -887,7 +889,8 @@ namespace
 		auto fake = std::make_unique<QueueFakeInference>(std::move(frame_detections));
 		auto_aim::Detector detector(make_default_config(), std::move(fake));
 		auto_aim::Solver solver(make_valid_solver_config());
-		auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver));
+		auto_aim::Tracker tracker(auto_aim::make_default_tracker_config());
+		auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver), std::move(tracker));
 
 		auto_aim::FrameContext frame;
 		frame.image = make_test_image();
@@ -909,8 +912,10 @@ namespace
 
 		const auto result_second = auto_aim.process(frame, &debug);
 
-		runner.expect(result_second.state == auto_aim::AimState::NoTarget,
-		              "Second frame without detection should be NoTarget");
+		// Commit 6 起：无检测帧会驱动 Tracker miss，但目标仍处于 Detecting
+		// （detecting_max_misses 未超），因此不是 NoTarget。
+		runner.expect(result_second.state == auto_aim::AimState::Detecting,
+		              "Second frame without detection drives Tracker miss, stays Detecting");
 		runner.expect(result_second.observations.empty(),
 		              "Second frame result must not retain previous frame observations");
 		runner.expect(debug.detected_armors.empty(),

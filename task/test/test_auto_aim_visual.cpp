@@ -420,7 +420,8 @@ int main(int argc, char** argv)
 
 	app::auto_aim::Detector detector(detector_config, std::move(inference));
 	app::auto_aim::Solver solver(solver_config);
-	app::auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver));
+	app::auto_aim::Tracker tracker(app::auto_aim::make_default_tracker_config());
+	app::auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver), std::move(tracker));
 
 	if(!auto_aim.is_ready())
 	{

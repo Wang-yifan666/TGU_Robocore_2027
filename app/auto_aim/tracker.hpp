@@ -82,6 +82,14 @@ namespace app::auto_aim
 	};
 
 	/**
+	 * @brief 构造一个可用于离线/演示/测试 composition 的 TrackerConfig。
+	 *
+	 * 注意：这是 task/composition 层的 dev helper，不是 production TOML 装载；
+	 * 生产路径应显式从 config 解析 TrackerConfig。
+	 */
+	TrackerConfig make_default_tracker_config();
+
+	/**
 	 * @brief 单 Tracker 生命周期（LOST/DETECTING/TRACKING/TEMP_LOST）。
 	 */
 	class Tracker

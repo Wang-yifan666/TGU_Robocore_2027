@@ -29,6 +29,7 @@
 #include "app/auto_aim/armor.hpp"
 #include "app/auto_aim/detector/detector.hpp"
 #include "app/auto_aim/solver.hpp"
+#include "app/auto_aim/tracker.hpp"
 #include "app/auto_aim/tracker_types.hpp"
 #include "app/auto_aim/types.hpp"
 
@@ -70,10 +71,26 @@ namespace app::auto_aim
 	 */
 	struct AimResult
 	{
+		/**
+		 * @brief 是否存在“可用”的车辆级 TrackedTarget。
+		 *
+		 * Commit 6 起语义升级为：
+		 *   Tracking / TempLost -> true
+		 *   Detecting / Lost    -> false
+		 *
+		 * 注意：false 不代表本帧没有可见装甲板；Detecting 阶段的
+		 * 未确认 target 仍可通过 tracked_target 观察。
+		 */
 		bool has_target = false;
 
 		AimState state = AimState::Idle;
 
+		/**
+		 * @brief legacy visible-armor compatibility output。
+		 *
+		 * 仅表达“当前可见 + PnP 成功的装甲板”的兼容信息，
+		 * NOT vehicle tracking state。authoritative tracking result 见 tracked_target。
+		 */
 		Armor target;
 
 		/**
@@ -84,6 +101,13 @@ namespace app::auto_aim
 		 * Tracker 后续只消费本列表，不依赖 target / Armor / cv::Mat。
 		 */
 		std::vector<ArmorObservation> observations;
+
+		/**
+		 * @brief 车辆级跟踪结果（Commit 6 起 authoritative tracking output）。
+		 *
+		 * 无 tracker 或 Lost 状态时为 nullopt。
+		 */
+		std::optional<TrackedTarget> tracked_target;
 
 		/**
 		 * @brief raw geometric line-of-sight observation，NOT final ballistic compensated command。
@@ -153,7 +177,13 @@ namespace app::auto_aim
 	class AutoAim
 	{
 	public:
-		AutoAim(Detector detector, Solver solver);
+		/**
+		 * @brief 构造 AutoAim facade：持有 Detector / Solver / Tracker。
+		 *
+		 * AutoAim 不读取 TOML、不构造模型/硬件依赖；Tracker 已由
+		 * task/composition 层根据 config 构造后注入。
+		 */
+		AutoAim(Detector detector, Solver solver, Tracker tracker);
 
 		/**
 		 * @brief 处理单帧输入。
@@ -163,6 +193,9 @@ namespace app::auto_aim
 		 */
 		AimResult process(const FrameContext& frame, AutoAimDebugData* debug = nullptr);
 
+		/**
+		 * @brief 重置：frame_count 归零，并 reset Tracker 生命周期。
+		 */
 		void reset();
 
 		bool is_ready() const noexcept;
@@ -170,6 +203,7 @@ namespace app::auto_aim
 	private:
 		Detector detector_;
 		Solver solver_;
+		Tracker tracker_;
 
 		std::uint64_t frame_count_ = 0;
 	};

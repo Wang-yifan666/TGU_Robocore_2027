@@ -66,9 +66,9 @@ namespace
 		return std::isfinite(point.x) && std::isfinite(point.y);
 	}
 
-	// pre-tracker 阶段合法 process() 输出状态仅：
-	// NoFrame / NoTarget / Detecting / Error。
-	// Idle / Tracking / TargetLocked 一律视为非法。
+	// Commit 6 起合法 process() 输出状态：
+	// NoFrame / NoTarget / Detecting / Tracking / Error。
+	// Idle / TargetLocked 一律视为非法。
 	bool is_valid_state(app::auto_aim::AimState state)
 	{
 		switch(state)
@@ -76,6 +76,7 @@ namespace
 		case app::auto_aim::AimState::NoFrame:
 		case app::auto_aim::AimState::NoTarget:
 		case app::auto_aim::AimState::Detecting:
+		case app::auto_aim::AimState::Tracking:
 		case app::auto_aim::AimState::Error:
 			return true;
 		default:
@@ -210,7 +211,8 @@ int main()
 
 	app::auto_aim::Detector detector(detector_config, std::move(inference));
 	app::auto_aim::Solver solver(solver_config);
-	app::auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver));
+	app::auto_aim::Tracker tracker(app::auto_aim::make_default_tracker_config());
+	app::auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver), std::move(tracker));
 
 	if(!auto_aim.is_ready())
 	{
