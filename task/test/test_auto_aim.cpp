@@ -425,35 +425,39 @@ namespace
 
 		runner.expect(result.state == auto_aim::AimState::Detecting,
 		              "One valid detection should produce Detecting state");
-		runner.expect(result.has_target, "Detecting result should have a target");
+		// P1-1：Detecting 阶段 has_target == false，但 tracked_target 可用。
+		runner.expect(!result.has_target, "Detecting result should have has_target == false");
+		runner.expect(result.tracked_target.has_value(),
+		              "Detecting result should still expose tracked_target");
+		runner.expect(result.tracked_target
+		                  && result.tracked_target->state == auto_aim::TrackerState::Detecting,
+		              "tracked_target state should be Detecting");
 
-		if(result.has_target)
+		// legacy visible-armor 兼容输出仍在。
+		runner.expect(result.target.name == auto_aim::ArmorName::Three,
+		              "Target name should be three");
+		runner.expect(result.target.type == auto_aim::ArmorType::Small,
+		              "Target type should be small");
+		runner.expect(result.target.color == auto_aim::ArmorColor::Blue,
+		              "Target color should be blue");
+
+		runner.expect(result.target.points.size() == 4,
+		              "Target should keep four keypoints");
+
+		for(const auto& point: result.target.points)
 		{
-			runner.expect(result.target.name == auto_aim::ArmorName::Three,
-			              "Target name should be three");
-			runner.expect(result.target.type == auto_aim::ArmorType::Small,
-			              "Target type should be small");
-			runner.expect(result.target.color == auto_aim::ArmorColor::Blue,
-			              "Target color should be blue");
-
-			runner.expect(result.target.points.size() == 4,
-			              "Target should keep four keypoints");
-
-			for(const auto& point: result.target.points)
-			{
-				runner.expect(is_finite_point(point), "Target 2D points should be finite");
-			}
-
-			const bool finite_xyz =
-			    std::isfinite(result.target.xyz_in_gimbal.x())
-			    && std::isfinite(result.target.xyz_in_gimbal.y())
-			    && std::isfinite(result.target.xyz_in_gimbal.z());
-
-			runner.expect(finite_xyz, "Target xyz_in_gimbal should be finite");
-
-			runner.expect(result.distance > 0.0,
-			              "Solved target distance should be positive");
+			runner.expect(is_finite_point(point), "Target 2D points should be finite");
 		}
+
+		const bool finite_xyz =
+		    std::isfinite(result.target.xyz_in_gimbal.x())
+		    && std::isfinite(result.target.xyz_in_gimbal.y())
+		    && std::isfinite(result.target.xyz_in_gimbal.z());
+
+		runner.expect(finite_xyz, "Target xyz_in_gimbal should be finite");
+
+		runner.expect(result.distance > 0.0,
+		              "Solved target distance should be positive");
 
 		runner.end();
 	}
@@ -479,18 +483,14 @@ namespace
 
 		runner.expect(result.state == auto_aim::AimState::Detecting,
 		              "Multiple detections should produce Detecting state");
-		runner.expect(result.has_target, "Multiple detections should yield a target");
+		runner.expect(!result.has_target,
+		              "Multiple detections should yield has_target == false (Detecting)");
 
-		if(result.has_target)
-		{
-			// 靠近图像中心的目标中心 = (640, 370)。
-			const cv::Point2f expected_near_center(640.0F, 370.0F);
-
-			const double error = cv::norm(result.target.center - expected_near_center);
-
-			runner.expect(error < 1e-3,
-			              "Closer-to-image-center armor should be selected preferentially");
-		}
+		// legacy 可见装甲板选择仍应先靠近图像中心者。
+		const cv::Point2f expected_near_center(640.0F, 370.0F);
+		const double error = cv::norm(result.target.center - expected_near_center);
+		runner.expect(error < 1e-3,
+		              "Closer-to-image-center armor should be selected preferentially");
 
 		runner.end();
 	}
@@ -843,7 +843,6 @@ namespace
 		                  && *debug.selected_armor_index == 1,
 		              "Pre-tracker target selection should still pick near armor (index 1)");
 
-		if(result.has_target)
 		{
 			const cv::Point2f expected_near_center(640.0F, 370.0F);
 			runner.expect(cv::norm(result.target.center - expected_near_center) < 1e-3,

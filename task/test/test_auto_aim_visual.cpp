@@ -116,7 +116,7 @@ namespace
 
 			const double norm_squared = w * w + x * x + y * y + z * z;
 
-			if(norm_squared <= 1e-12)
+			if(!std::isfinite(norm_squared) || norm_squared <= 1e-12)
 			{
 				std::printf("[%s] [WARN] zero-norm quaternion at line %zu\n", MODULE, count + 1);
 				return false;
@@ -216,7 +216,7 @@ namespace
 	void draw_solver_info(cv::Mat& canvas, const app::auto_aim::AimResult& result,
 	                      bool has_sync_quaternions)
 	{
-		if(!result.has_target)
+		if(!result.has_visible_target)
 		{
 			return;
 		}

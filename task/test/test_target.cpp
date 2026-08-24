@@ -587,6 +587,88 @@ namespace
 	}
 
 	// ============================================================
+	// Test：public helper contract（P2-3）
+	// ============================================================
+
+	void test_helper_contracts(TestRunner& runner)
+	{
+		runner.begin("Public helper contracts");
+
+		app::auto_aim::Target t = make_target(0.0, 0.0, 0.0, 0.0, 0.2);
+
+		// 正确调用不应抛异常。
+		{
+			bool threw = false;
+
+			try
+			{
+				(void)t.measurement_model(t.state(), 0);
+				(void)t.measurement_jacobian(t.state(), 0);
+			}
+			catch(...)
+			{
+				threw = true;
+			}
+
+			runner.expect(!threw, "valid inputs do not throw");
+		}
+
+		// x 维度错误。
+		{
+			bool threw = false;
+			Eigen::VectorXd bad(3);
+			bad.setZero();
+
+			try
+			{
+				(void)t.measurement_model(bad, 0);
+			}
+			catch(const std::invalid_argument&)
+			{
+				threw = true;
+			}
+
+			runner.expect(threw, "wrong x dimension throws invalid_argument");
+		}
+
+		// x 含 NaN。
+		{
+			bool threw = false;
+			Eigen::VectorXd bad = t.state();
+			bad(app::auto_aim::kStateX) = std::numeric_limits<double>::quiet_NaN();
+
+			try
+			{
+				(void)t.measurement_jacobian(bad, 0);
+			}
+			catch(const std::invalid_argument&)
+			{
+				threw = true;
+			}
+
+			runner.expect(threw, "non-finite x throws invalid_argument");
+		}
+
+		// armor_id 越界。
+		{
+			bool threw = false;
+
+			try
+			{
+				(void)t.measurement_model(t.state(), 99);
+			}
+			catch(const std::invalid_argument&)
+			{
+				threw = true;
+			}
+
+			runner.expect(threw, "armor_id out of range throws invalid_argument");
+		}
+
+		runner.end();
+	}
+
+	// ============================================================
 	// Test：only Eigen / tracker types (no Detector/Solver dependency)
 	// ============================================================
 
@@ -624,6 +706,7 @@ int main()
 	test_measurement_model_exact(runner);
 	test_delta_geometry_exact(runner);
 	test_jacobian_finite_difference(runner);
+	test_helper_contracts(runner);
 	test_no_detector_solver_dependency(runner);
 
 	runner.print_summary();

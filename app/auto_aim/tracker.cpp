@@ -15,6 +15,24 @@ namespace app::auto_aim
 
 	namespace
 	{
+		constexpr double kSymmetryTolerance = 1e-9;
+
+		bool finite_and_square_symmetric(const Eigen::MatrixXd& m, Eigen::Index dim)
+		{
+			if(m.rows() != dim || m.cols() != dim)
+			{
+				return false;
+			}
+
+			if(!m.allFinite())
+			{
+				return false;
+			}
+
+			const double scale = std::max(1.0, m.norm());
+			return (m - m.transpose()).norm() <= kSymmetryTolerance * scale;
+		}
+
 		int priority_rank(ArmorPriority priority)
 		{
 			switch(priority)
@@ -35,6 +53,107 @@ namespace app::auto_aim
 			}
 		}
 	} // namespace
+
+	void validate_tracker_config(const TrackerConfig& config)
+	{
+		if(config.detecting_confirm_hits < 1)
+		{
+			throw std::invalid_argument("detecting_confirm_hits must be >= 1");
+		}
+
+		if(config.detecting_max_misses < 0)
+		{
+			throw std::invalid_argument("detecting_max_misses must be >= 0");
+		}
+
+		if(config.temp_lost_max_misses < 0)
+		{
+			throw std::invalid_argument("temp_lost_max_misses must be >= 0");
+		}
+
+		if(!std::isfinite(config.max_dt_s) || config.max_dt_s <= 0.0)
+		{
+			throw std::invalid_argument("max_dt_s must be finite and > 0");
+		}
+
+		const AssociationConfig& a = config.association;
+
+		if(!std::isfinite(a.max_position_error_m) || a.max_position_error_m < 0.0)
+		{
+			throw std::invalid_argument("max_position_error_m must be finite and >= 0");
+		}
+
+		if(!std::isfinite(a.max_yaw_error_rad) || a.max_yaw_error_rad < 0.0)
+		{
+			throw std::invalid_argument("max_yaw_error_rad must be finite and >= 0");
+		}
+
+		if(!std::isfinite(a.position_score_scale_m) || a.position_score_scale_m <= 0.0)
+		{
+			throw std::invalid_argument("position_score_scale_m must be finite and > 0");
+		}
+
+		if(!std::isfinite(a.yaw_score_scale_rad) || a.yaw_score_scale_rad <= 0.0)
+		{
+			throw std::invalid_argument("yaw_score_scale_rad must be finite and > 0");
+		}
+
+		if(!finite_and_square_symmetric(config.initial_covariance, kTargetStateDim))
+		{
+			throw std::invalid_argument("initial_covariance must be 11x11 finite symmetric");
+		}
+
+		if(!finite_and_square_symmetric(config.measurement_covariance, kTargetMeasurementDim))
+		{
+			throw std::invalid_argument("measurement_covariance must be 4x4 finite symmetric");
+		}
+
+		const TargetModelConfig& p = config.process_noise;
+
+		auto non_negative_finite = [](double v) {
+			return std::isfinite(v) && v >= 0.0;
+		};
+
+		if(!non_negative_finite(p.translation_accel_variance)
+		   || !non_negative_finite(p.yaw_accel_variance)
+		   || !non_negative_finite(p.radius_random_walk_variance)
+		   || !non_negative_finite(p.delta_radius_random_walk_variance)
+		   || !non_negative_finite(p.delta_z_random_walk_variance))
+		{
+			throw std::invalid_argument(
+			    "process noise variances must be finite and non-negative");
+		}
+
+		if(!std::isfinite(config.min_radius_m) || !std::isfinite(config.max_radius_m)
+		   || config.min_radius_m <= 0.0 || config.max_radius_m < config.min_radius_m)
+		{
+			throw std::invalid_argument("radius bounds must satisfy 0 < min <= max");
+		}
+
+		const RadiusProfile& rp = config.radius_profile;
+
+		auto positive_finite = [](double v) {
+			return std::isfinite(v) && v > 0.0;
+		};
+
+		if(!positive_finite(rp.balance_2) || !positive_finite(rp.outpost_3)
+		   || !positive_finite(rp.base_3) || !positive_finite(rp.default_4))
+		{
+			throw std::invalid_argument("radius profile values must be finite and > 0");
+		}
+
+		// 每个 RadiusProfile 值必须落在 [min_radius_m, max_radius_m] 之内。
+		auto radius_in_range = [config](double v) {
+			return v >= config.min_radius_m && v <= config.max_radius_m;
+		};
+
+		if(!radius_in_range(rp.balance_2) || !radius_in_range(rp.outpost_3)
+		   || !radius_in_range(rp.base_3) || !radius_in_range(rp.default_4))
+		{
+			throw std::invalid_argument(
+			    "radius profile values must lie within [min_radius_m, max_radius_m]");
+		}
+	}
 
 	TrackerConfig make_default_tracker_config()
 	{
@@ -63,27 +182,17 @@ namespace app::auto_aim
 		c.min_radius_m = 0.05;
 		c.max_radius_m = 0.5;
 
+		c.radius_profile.balance_2 = 0.2;
+		c.radius_profile.outpost_3 = 0.2765;
+		c.radius_profile.base_3 = 0.3205;
+		c.radius_profile.default_4 = 0.2;
+
 		return c;
 	}
 
 	Tracker::Tracker(const TrackerConfig& config): config_(config)
 	{
-		if(config.detecting_confirm_hits < 0 || config.detecting_max_misses < 0
-		   || config.temp_lost_max_misses < 0)
-		{
-			throw std::invalid_argument("hit/miss thresholds must be non-negative");
-		}
-
-		if(!std::isfinite(config.max_dt_s) || config.max_dt_s < 0.0)
-		{
-			throw std::invalid_argument("max_dt_s must be finite and >= 0");
-		}
-
-		if(!std::isfinite(config.min_radius_m) || !std::isfinite(config.max_radius_m)
-		   || config.min_radius_m <= 0.0 || config.max_radius_m < config.min_radius_m)
-		{
-			throw std::invalid_argument("radius bounds must be 0 < min <= max");
-		}
+		validate_tracker_config(config);
 	}
 
 	double Tracker::radius_for(const ArmorObservation& observation) const
@@ -215,41 +324,45 @@ namespace app::auto_aim
 		last_timestamp_s_ = 0.0;
 	}
 
-	std::optional<TrackedTarget> Tracker::track(const std::vector<ArmorObservation>& observations,
-	                                            double timestamp_s)
+	TrackResult Tracker::track(const std::vector<ArmorObservation>& observations,
+	                           double timestamp_s)
 	{
 		if(!std::isfinite(timestamp_s))
 		{
 			throw std::invalid_argument("timestamp_s must be finite");
 		}
 
-		// ---- 尚未有 target（Lost）----
+		// ---- 尚无 target：初始化 ----
 		if(state_ == TrackerState::Lost && !target_.has_value())
 		{
 			const std::optional<ArmorObservation> candidate = select_initial_observation(observations);
 
 			if(!candidate)
 			{
-				return std::nullopt;
+				return TrackResult{timestamp_s, TrackUpdateOutcome::NotTracked, std::nullopt};
 			}
 
 			const double radius = radius_for(*candidate);
 
 			target_.emplace(*candidate, radius, config_.initial_covariance, config_.process_noise);
-			state_ = TrackerState::Detecting;
 			hit_count_ = 1;
 			miss_count_ = 0;
+
+			// 初始化帧可能进入 Detecting（confirm_hits > 1）或 Tracking（confirm_hits == 1）。
+			state_ = (hit_count_ >= config_.detecting_confirm_hits) ? TrackerState::Tracking
+			                                                       : TrackerState::Detecting;
 
 			last_timestamp_s_ = timestamp_s;
 			has_timestamp_ = true;
 
-			return make_snapshot(TrackerState::Detecting, timestamp_s);
+			TrackedTarget snapshot = make_snapshot(state_, timestamp_s);
+			return TrackResult{timestamp_s, TrackUpdateOutcome::Initialized, snapshot};
 		}
 
 		// ---- 已有 target ----
 		const double dt = has_timestamp_ ? (timestamp_s - last_timestamp_s_) : 0.0;
 
-		// dt < 0（timestamp regression）或 dt 过大：reset 后重新初始化当前帧。
+		// dt < 0（timestamp regression）或 dt 过大：reset 后初始化当前帧。
 		if(dt < 0.0 || dt > config_.max_dt_s)
 		{
 			reset();
@@ -259,30 +372,40 @@ namespace app::auto_aim
 
 			if(!candidate)
 			{
-				return std::nullopt;
+				return TrackResult{timestamp_s, TrackUpdateOutcome::NotTracked, std::nullopt};
 			}
 
 			const double radius = radius_for(*candidate);
 
 			target_.emplace(*candidate, radius, config_.initial_covariance, config_.process_noise);
-			state_ = TrackerState::Detecting;
 			hit_count_ = 1;
 			miss_count_ = 0;
+
+			state_ = (hit_count_ >= config_.detecting_confirm_hits) ? TrackerState::Tracking
+			                                                       : TrackerState::Detecting;
 
 			last_timestamp_s_ = timestamp_s;
 			has_timestamp_ = true;
 
-			return make_snapshot(TrackerState::Detecting, timestamp_s);
+			TrackedTarget snapshot = make_snapshot(state_, timestamp_s);
+			return TrackResult{timestamp_s, TrackUpdateOutcome::Initialized, snapshot};
 		}
 
 		// 正常预测（dt == 0 允许，不除以 dt）。
 		target_->predict(dt);
 		last_timestamp_s_ = timestamp_s;
 
+		// 记录 correction 前的先验预测中心（board-switch continuity 指标用）。
+		// 注意：predict 之后即有效，即使本帧 NoAssociation 也会保留。
+		const Eigen::VectorXd& predicted_state = target_->state();
+		const Eigen::Vector3d prior_predicted_center(
+		    predicted_state(kStateX), predicted_state(kStateY), predicted_state(kStateZ));
+
 		// association + correction。
 		const std::optional<AssociationResult> assoc =
 		    associate(*target_, observations, config_.association);
 
+		const bool associated = assoc.has_value();
 		bool corrected = false;
 
 		if(assoc)
@@ -291,11 +414,23 @@ namespace app::auto_aim
 			corrected = target_->correct(matched, assoc->armor_id, config_.measurement_covariance);
 		}
 
-		// geometry health：失败即 Lost。
+		// 先结算本帧 outcome（与 target 生命周期分离；Lost 也保留真实结果）。
+		TrackUpdateOutcome frame_outcome = TrackUpdateOutcome::NoAssociation;
+
+		if(corrected)
+		{
+			frame_outcome = TrackUpdateOutcome::Corrected;
+		}
+		else if(associated)
+		{
+			frame_outcome = TrackUpdateOutcome::CorrectionFailed;
+		}
+
+		// geometry health：几何硬失败即 Lost（不属于 CorrectionFailed/NoAssociation 语义）。
 		if(!geometry_healthy())
 		{
 			reset();
-			return std::nullopt;
+			return TrackResult{timestamp_s, TrackUpdateOutcome::NotTracked, std::nullopt};
 		}
 
 		// 状态机推进。
@@ -319,7 +454,7 @@ namespace app::auto_aim
 				if(miss_count_ > config_.detecting_max_misses)
 				{
 					reset();
-					return std::nullopt;
+					return TrackResult{timestamp_s, frame_outcome, std::nullopt};
 				}
 			}
 
@@ -328,6 +463,13 @@ namespace app::auto_aim
 		case TrackerState::Tracking:
 			if(!corrected)
 			{
+				// temp_lost_max_misses == 0 时不输出 TempLost 帧，直接 Lost。
+				if(config_.temp_lost_max_misses == 0)
+				{
+					reset();
+					return TrackResult{timestamp_s, frame_outcome, std::nullopt};
+				}
+
 				state_ = TrackerState::TempLost;
 				miss_count_ = 1;
 			}
@@ -347,7 +489,7 @@ namespace app::auto_aim
 				if(miss_count_ > config_.temp_lost_max_misses)
 				{
 					reset();
-					return std::nullopt;
+					return TrackResult{timestamp_s, frame_outcome, std::nullopt};
 				}
 			}
 
@@ -359,8 +501,9 @@ namespace app::auto_aim
 		}
 
 		TrackedTarget snapshot = make_snapshot(state_, timestamp_s);
+		snapshot.prior_predicted_center = prior_predicted_center;
 
-		if(corrected && assoc)
+		if(corrected)
 		{
 			snapshot.has_measurement = true;
 			snapshot.matched_observation_index = assoc->observation_index;
@@ -369,7 +512,7 @@ namespace app::auto_aim
 			snapshot.nis = target_->last_nis();
 		}
 
-		return snapshot;
+		return TrackResult{timestamp_s, frame_outcome, snapshot};
 	}
 
 } // namespace app::auto_aim

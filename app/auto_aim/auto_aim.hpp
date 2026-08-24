@@ -1,16 +1,16 @@
 /**
  * @file auto_aim.hpp
- * @brief 自瞄算法 facade / orchestrator（pre-tracker 阶段）。
+ * @brief 自瞄算法 facade / orchestrator（含 Tracker）。
  *
- * 本阶段职责：
- *   Detector -> Solver(all) -> ArmorObservation[] -> pre-tracker compatibility selection -> AimResult
+ * 职责：
+ *   Detector -> Solver(all) -> ArmorObservation[] -> Tracker -> TrackedTarget -> AimResult
  *
  * 不负责：
  * - 读取 TOML 配置；
  * - 构造 OpenVINOInference；
  * - 访问 camera / serial。
  *
- * 依赖装配（Detector / Solver）由 task 层完成并注入。
+ * 依赖装配（Detector / Solver / Tracker）由 task 层完成并注入。
  */
 
 #ifndef TGU_ROBOCORE_2027_AUTO_AIM_HPP
@@ -50,10 +50,13 @@ namespace app::auto_aim
 	};
 
 	/**
-	 * @brief 自瞄状态。
+	 * @brief 自瞄状态（面向下游的输出状态）。
 	 *
-	 * Tracking / TargetLocked 保留给后续 Tracker / Aimer 阶段，
-	 * 本阶段不产生这两个状态。
+	 * NoFrame / Error 表示本帧未产生有效感知；
+	 * NoTarget 表示 Tracker 处于 Lost（无可用车辆目标）；
+	 * Detecting 表示 Tracker 已初始化但未确认；
+	 * Tracking 表示 Tracker 已确认或处于 TempLost 预测中；
+	 * TargetLocked 保留给后续 Aimer/Planner 阶段，本阶段不产生。
 	 */
 	enum class AimState : std::uint8_t
 	{
@@ -83,7 +86,24 @@ namespace app::auto_aim
 		 */
 		bool has_target = false;
 
+		/**
+		 * @brief 本帧 tracker 的真实 outcome（与车辆级 target 生命周期分离）。
+		 *
+		 * 即使本帧 transition 到 Lost、target 为 nullopt，outcome 仍保留真实结果
+		 * （CorrectionFailed / NoAssociation / Corrected / Initialized / NotTracked）。
+		 */
+		TrackUpdateOutcome outcome = TrackUpdateOutcome::NotTracked;
+
 		AimState state = AimState::Idle;
+
+		/**
+		 * @brief 是否存在“当前可见 + PnP 成功”的 legacy 可见装甲板。
+		 *
+		 * 仅作为 legacy Armor target 的有效性信号（见 target 字段），
+		 * 与车辆级 has_target（Tracking / TempLost）完全解耦，
+		 * 不得用于 Tracker 控制目标有效性判断。
+		 */
+		bool has_visible_target = false;
 
 		/**
 		 * @brief legacy visible-armor compatibility output。

@@ -231,6 +231,16 @@ namespace app::auto_aim
 
 	Eigen::Vector4d Target::measurement_model(const Eigen::VectorXd& x, int armor_id) const
 	{
+		if(x.size() != kTargetStateDim || x.cols() != 1 || !x.allFinite())
+		{
+			throw std::invalid_argument("x must be (11 x 1) and finite");
+		}
+
+		if(armor_id < 0 || armor_id >= armor_count_)
+		{
+			throw std::invalid_argument("armor_id out of range");
+		}
+
 		const ArmorGeometry g = geometry(x, armor_id);
 
 		Eigen::Vector4d z;
@@ -295,6 +305,16 @@ namespace app::auto_aim
 
 	Eigen::MatrixXd Target::measurement_jacobian(const Eigen::VectorXd& x, int armor_id) const
 	{
+		if(x.size() != kTargetStateDim || x.cols() != 1 || !x.allFinite())
+		{
+			throw std::invalid_argument("x must be (11 x 1) and finite");
+		}
+
+		if(armor_id < 0 || armor_id >= armor_count_)
+		{
+			throw std::invalid_argument("armor_id out of range");
+		}
+
 		const ArmorGeometry g = geometry(x, armor_id);
 
 		const double sin_theta = std::sin(g.theta);

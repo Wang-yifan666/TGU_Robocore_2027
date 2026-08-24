@@ -81,7 +81,7 @@ namespace
 
 			const double norm_squared = w * w + x * x + y * y + z * z;
 
-			if(norm_squared <= 1e-12)
+			if(!std::isfinite(norm_squared) || norm_squared <= 1e-12)
 			{
 				return false;
 			}
@@ -148,7 +148,7 @@ namespace
 	                  const Eigen::VectorXd& state, std::size_t frame_index, double nis)
 	{
 		// 检测到的装甲板轮廓（绿色）。
-		if(result.has_target && result.target.points.size() == 4)
+		if(result.has_visible_target && result.target.points.size() == 4)
 		{
 			std::vector<cv::Point> contour;
 			contour.reserve(4);
@@ -171,7 +171,7 @@ namespace
 		cv::putText(canvas, line0, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.6,
 		            cv::Scalar(255, 255, 255), 1);
 
-		if(result.has_target)
+		if(result.has_visible_target)
 		{
 			char line1[256];
 			std::snprintf(line1, sizeof(line1), "meas (%.3f, %.3f, %.3f)",
@@ -330,7 +330,7 @@ int main(int argc, char** argv)
 		++processed_frames;
 
 		// 有 target：用 gimbal 位置作为测量做 update；否则只 predict。
-		if(result.has_target && is_finite_vector3(result.target.xyz_in_gimbal))
+		if(result.has_visible_target && is_finite_vector3(result.target.xyz_in_gimbal))
 		{
 			++target_frames;
 
@@ -386,7 +386,8 @@ int main(int argc, char** argv)
 			std::printf(
 			    "[%s] frame %zu: target=%d state=[%.3f,%.3f,%.3f | %.3f,%.3f,%.3f] "
 			    "nis=%.3f\n",
-			    kModule, frame_index, result.has_target ? 1 : 0, x(0), x(1), x(2), x(3), x(4),
+			    kModule, frame_index, result.has_visible_target ? 1 : 0, x(0), x(1), x(2), x(3),
+			    x(4),
 			    x(5), ekf.last_nis());
 		}
 

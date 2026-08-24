@@ -13,6 +13,7 @@
 #include <opencv2/core.hpp>
 
 #include "app/auto_aim/auto_aim.hpp"
+#include "app/auto_aim/tracker_config.hpp"
 #include "tools/logger.hpp"
 
 namespace
@@ -96,7 +97,17 @@ int main(int argc, char** argv)
 	app::auto_aim::SolverConfig solver_config;
 	app::auto_aim::Solver solver(solver_config);
 
-	app::auto_aim::Tracker tracker(app::auto_aim::make_default_tracker_config());
+	app::auto_aim::TrackerConfig tracker_config;
+
+	if(!app::auto_aim::load_tracker_config(
+	       std::string(PROJECT_SOURCE_DIR) + "/config/app/auto_aim/tracker.toml",
+	       tracker_config))
+	{
+		LOG_ERROR(MODULE, "failed to load tracker config");
+		return -1;
+	}
+
+	app::auto_aim::Tracker tracker(tracker_config);
 	app::auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver), std::move(tracker));
 
 	// 依赖未就绪时直接退出，避免每 10ms 空转刷 ERROR。
@@ -123,20 +134,32 @@ int main(int argc, char** argv)
 
 		auto result = auto_aim.process(frame_context);
 
-		if(result.has_target)
+		// 只有 Tracking / TempLost 才是 confirmed 控制目标（has_target == true）。
+		// Detecting 阶段即使 tracked_target 存在也只是未确认候选，不得作为控制目标。
+		if(result.has_target && result.tracked_target.has_value())
 		{
-			// pre-tracker 阶段：仅输出 raw geometric observation，
-			// 不把 yaw/pitch 当作最终云台控制命令。
-			LOG_INFO(MODULE, "target detected/solved, xyz_in_gimbal=({:.3f}, {:.3f}, {:.3f}) m, "
-			                 "distance={:.3f} m",
-			         result.target.xyz_in_gimbal.x(), result.target.xyz_in_gimbal.y(),
-			         result.target.xyz_in_gimbal.z(), result.distance);
+			const auto& tracked = *result.tracked_target;
 
-			// TODO: 串口发送给下位机
+			LOG_INFO(MODULE, "confirmed target center=({:.3f}, {:.3f}, {:.3f}) m, "
+			                 "vel=({:.3f}, {:.3f}, {:.3f}) m/s, yaw={:.3f} rad, has_meas={}",
+			         tracked.center_in_world.x(), tracked.center_in_world.y(),
+			         tracked.center_in_world.z(), tracked.velocity_in_world.x(),
+			         tracked.velocity_in_world.y(), tracked.velocity_in_world.z(), tracked.yaw,
+			         tracked.has_measurement ? 1 : 0);
+
+			// TODO: 串口发送给下位机（未来 Aimer/Planner 消费 tracked）
+		}
+		else if(result.tracked_target.has_value())
+		{
+			// Detecting：tracked_target 存在但未确认，不作为控制目标。
+			const auto& tracked = *result.tracked_target;
+			LOG_DEBUG(MODULE, "unconfirmed target (Detecting), center=({:.3f}, {:.3f}, {:.3f}) m",
+			          tracked.center_in_world.x(), tracked.center_in_world.y(),
+			          tracked.center_in_world.z());
 		}
 		else
 		{
-			LOG_DEBUG(MODULE, "no target");
+			LOG_DEBUG(MODULE, "no tracked target (Lost)");
 		}
 
 		// TODO: 接入 Foxglove / debug image / performance profiler

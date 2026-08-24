@@ -56,7 +56,7 @@ namespace
 	struct PipelineStats
 	{
 		std::size_t processed_frames = 0;
-		std::size_t solved_target_frames = 0;  // has_target == true（成功 PnP）
+		std::size_t solved_target_frames = 0;  // has_visible_target == true（成功 PnP）
 		std::size_t no_target_frames = 0;      // NoTarget
 		std::size_t error_frames = 0;          // Error / NoFrame（异常路径）
 	};
@@ -114,7 +114,7 @@ namespace
 
 			const double norm_squared = w * w + x * x + y * y + z * z;
 
-			if(norm_squared <= 1e-12)
+			if(!std::isfinite(norm_squared) || norm_squared <= 1e-12)
 			{
 				std::printf("[%s] [WARN] zero-norm quaternion at line %zu\n", MODULE, count + 1);
 				return false;
@@ -304,7 +304,7 @@ int main()
 		{
 			++stats.no_target_frames;
 		}
-		else if(result.state == app::auto_aim::AimState::Detecting && result.has_target)
+		else if(result.has_visible_target)
 		{
 			++stats.solved_target_frames;
 

@@ -217,6 +217,7 @@ namespace app::auto_aim
 			}
 
 			result.target = candidate;
+			result.has_visible_target = true;
 
 			const double distance = candidate.xyz_in_gimbal.norm();
 			result.distance = distance;
@@ -225,14 +226,18 @@ namespace app::auto_aim
 		}
 
 		// ---- 5. Tracker 消费所有 observations（空 observations 也驱动 miss）----
-		const std::optional<TrackedTarget> tracked =
+		const TrackResult track_result =
 		    tracker_.track(result.observations, frame.timestamp_s);
 
-		if(tracked)
-		{
-			result.tracked_target = *tracked;
+		result.outcome = track_result.outcome;
 
-			switch(tracked->state)
+		if(track_result.target)
+		{
+			const TrackedTarget& tracked = *track_result.target;
+
+			result.tracked_target = tracked;
+
+			switch(tracked.state)
 			{
 			case TrackerState::Tracking:
 			case TrackerState::TempLost:
@@ -242,7 +247,7 @@ namespace app::auto_aim
 
 			case TrackerState::Detecting:
 				result.state = AimState::Detecting;
-				result.has_target = true;
+				result.has_target = false;
 				break;
 
 			case TrackerState::Lost:

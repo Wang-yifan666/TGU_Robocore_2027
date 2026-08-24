@@ -1,0 +1,3153 @@
+diff --git a/app/CMakeLists.txt b/app/CMakeLists.txt
+index d8fd4d0..2a0a0e1 100644
+--- a/app/CMakeLists.txt
++++ b/app/CMakeLists.txt
+@@ -7,6 +7,7 @@ add_library(app STATIC
+     auto_aim/solver_config.cpp
+     auto_aim/target.cpp
+     auto_aim/tracker.cpp
++    auto_aim/tracker_config.cpp
+ 
+     auto_aim/detector/detector.cpp
+     auto_aim/detector/detector_config.cpp
+diff --git a/app/auto_aim/auto_aim.cpp b/app/auto_aim/auto_aim.cpp
+index 6dfae0f..17fe909 100644
+--- a/app/auto_aim/auto_aim.cpp
++++ b/app/auto_aim/auto_aim.cpp
+@@ -217,6 +217,7 @@ namespace app::auto_aim
+ 			}
+ 
+ 			result.target = candidate;
++			result.has_visible_target = true;
+ 
+ 			const double distance = candidate.xyz_in_gimbal.norm();
+ 			result.distance = distance;
+@@ -225,14 +226,18 @@ namespace app::auto_aim
+ 		}
+ 
+ 		// ---- 5. Tracker 消费所有 observations（空 observations 也驱动 miss）----
+-		const std::optional<TrackedTarget> tracked =
++		const TrackResult track_result =
+ 		    tracker_.track(result.observations, frame.timestamp_s);
+ 
+-		if(tracked)
++		result.outcome = track_result.outcome;
++
++		if(track_result.target)
+ 		{
+-			result.tracked_target = *tracked;
++			const TrackedTarget& tracked = *track_result.target;
++
++			result.tracked_target = tracked;
+ 
+-			switch(tracked->state)
++			switch(tracked.state)
+ 			{
+ 			case TrackerState::Tracking:
+ 			case TrackerState::TempLost:
+@@ -242,7 +247,7 @@ namespace app::auto_aim
+ 
+ 			case TrackerState::Detecting:
+ 				result.state = AimState::Detecting;
+-				result.has_target = true;
++				result.has_target = false;
+ 				break;
+ 
+ 			case TrackerState::Lost:
+diff --git a/app/auto_aim/auto_aim.hpp b/app/auto_aim/auto_aim.hpp
+index 662eabd..4a0e0f5 100644
+--- a/app/auto_aim/auto_aim.hpp
++++ b/app/auto_aim/auto_aim.hpp
+@@ -1,16 +1,16 @@
+ /**
+  * @file auto_aim.hpp
+- * @brief 自瞄算法 facade / orchestrator（pre-tracker 阶段）。
++ * @brief 自瞄算法 facade / orchestrator（含 Tracker）。
+  *
+- * 本阶段职责：
+- *   Detector -> Solver(all) -> ArmorObservation[] -> pre-tracker compatibility selection -> AimResult
++ * 职责：
++ *   Detector -> Solver(all) -> ArmorObservation[] -> Tracker -> TrackedTarget -> AimResult
+  *
+  * 不负责：
+  * - 读取 TOML 配置；
+  * - 构造 OpenVINOInference；
+  * - 访问 camera / serial。
+  *
+- * 依赖装配（Detector / Solver）由 task 层完成并注入。
++ * 依赖装配（Detector / Solver / Tracker）由 task 层完成并注入。
+  */
+ 
+ #ifndef TGU_ROBOCORE_2027_AUTO_AIM_HPP
+@@ -50,10 +50,13 @@ namespace app::auto_aim
+ 	};
+ 
+ 	/**
+-	 * @brief 自瞄状态。
++	 * @brief 自瞄状态（面向下游的输出状态）。
+ 	 *
+-	 * Tracking / TargetLocked 保留给后续 Tracker / Aimer 阶段，
+-	 * 本阶段不产生这两个状态。
++	 * NoFrame / Error 表示本帧未产生有效感知；
++	 * NoTarget 表示 Tracker 处于 Lost（无可用车辆目标）；
++	 * Detecting 表示 Tracker 已初始化但未确认；
++	 * Tracking 表示 Tracker 已确认或处于 TempLost 预测中；
++	 * TargetLocked 保留给后续 Aimer/Planner 阶段，本阶段不产生。
+ 	 */
+ 	enum class AimState : std::uint8_t
+ 	{
+@@ -83,8 +86,25 @@ namespace app::auto_aim
+ 		 */
+ 		bool has_target = false;
+ 
++		/**
++		 * @brief 本帧 tracker 的真实 outcome（与车辆级 target 生命周期分离）。
++		 *
++		 * 即使本帧 transition 到 Lost、target 为 nullopt，outcome 仍保留真实结果
++		 * （CorrectionFailed / NoAssociation / Corrected / Initialized / NotTracked）。
++		 */
++		TrackUpdateOutcome outcome = TrackUpdateOutcome::NotTracked;
++
+ 		AimState state = AimState::Idle;
+ 
++		/**
++		 * @brief 是否存在“当前可见 + PnP 成功”的 legacy 可见装甲板。
++		 *
++		 * 仅作为 legacy Armor target 的有效性信号（见 target 字段），
++		 * 与车辆级 has_target（Tracking / TempLost）完全解耦，
++		 * 不得用于 Tracker 控制目标有效性判断。
++		 */
++		bool has_visible_target = false;
++
+ 		/**
+ 		 * @brief legacy visible-armor compatibility output。
+ 		 *
+diff --git a/app/auto_aim/target.cpp b/app/auto_aim/target.cpp
+index 6e80012..978378b 100644
+--- a/app/auto_aim/target.cpp
++++ b/app/auto_aim/target.cpp
+@@ -231,6 +231,16 @@ namespace app::auto_aim
+ 
+ 	Eigen::Vector4d Target::measurement_model(const Eigen::VectorXd& x, int armor_id) const
+ 	{
++		if(x.size() != kTargetStateDim || x.cols() != 1 || !x.allFinite())
++		{
++			throw std::invalid_argument("x must be (11 x 1) and finite");
++		}
++
++		if(armor_id < 0 || armor_id >= armor_count_)
++		{
++			throw std::invalid_argument("armor_id out of range");
++		}
++
+ 		const ArmorGeometry g = geometry(x, armor_id);
+ 
+ 		Eigen::Vector4d z;
+@@ -295,6 +305,16 @@ namespace app::auto_aim
+ 
+ 	Eigen::MatrixXd Target::measurement_jacobian(const Eigen::VectorXd& x, int armor_id) const
+ 	{
++		if(x.size() != kTargetStateDim || x.cols() != 1 || !x.allFinite())
++		{
++			throw std::invalid_argument("x must be (11 x 1) and finite");
++		}
++
++		if(armor_id < 0 || armor_id >= armor_count_)
++		{
++			throw std::invalid_argument("armor_id out of range");
++		}
++
+ 		const ArmorGeometry g = geometry(x, armor_id);
+ 
+ 		const double sin_theta = std::sin(g.theta);
+diff --git a/app/auto_aim/tracker.cpp b/app/auto_aim/tracker.cpp
+index cf5c9ba..7020d5d 100644
+--- a/app/auto_aim/tracker.cpp
++++ b/app/auto_aim/tracker.cpp
+@@ -15,6 +15,24 @@ namespace app::auto_aim
+ 
+ 	namespace
+ 	{
++		constexpr double kSymmetryTolerance = 1e-9;
++
++		bool finite_and_square_symmetric(const Eigen::MatrixXd& m, Eigen::Index dim)
++		{
++			if(m.rows() != dim || m.cols() != dim)
++			{
++				return false;
++			}
++
++			if(!m.allFinite())
++			{
++				return false;
++			}
++
++			const double scale = std::max(1.0, m.norm());
++			return (m - m.transpose()).norm() <= kSymmetryTolerance * scale;
++		}
++
+ 		int priority_rank(ArmorPriority priority)
+ 		{
+ 			switch(priority)
+@@ -36,6 +54,107 @@ namespace app::auto_aim
+ 		}
+ 	} // namespace
+ 
++	void validate_tracker_config(const TrackerConfig& config)
++	{
++		if(config.detecting_confirm_hits < 1)
++		{
++			throw std::invalid_argument("detecting_confirm_hits must be >= 1");
++		}
++
++		if(config.detecting_max_misses < 0)
++		{
++			throw std::invalid_argument("detecting_max_misses must be >= 0");
++		}
++
++		if(config.temp_lost_max_misses < 0)
++		{
++			throw std::invalid_argument("temp_lost_max_misses must be >= 0");
++		}
++
++		if(!std::isfinite(config.max_dt_s) || config.max_dt_s <= 0.0)
++		{
++			throw std::invalid_argument("max_dt_s must be finite and > 0");
++		}
++
++		const AssociationConfig& a = config.association;
++
++		if(!std::isfinite(a.max_position_error_m) || a.max_position_error_m < 0.0)
++		{
++			throw std::invalid_argument("max_position_error_m must be finite and >= 0");
++		}
++
++		if(!std::isfinite(a.max_yaw_error_rad) || a.max_yaw_error_rad < 0.0)
++		{
++			throw std::invalid_argument("max_yaw_error_rad must be finite and >= 0");
++		}
++
++		if(!std::isfinite(a.position_score_scale_m) || a.position_score_scale_m <= 0.0)
++		{
++			throw std::invalid_argument("position_score_scale_m must be finite and > 0");
++		}
++
++		if(!std::isfinite(a.yaw_score_scale_rad) || a.yaw_score_scale_rad <= 0.0)
++		{
++			throw std::invalid_argument("yaw_score_scale_rad must be finite and > 0");
++		}
++
++		if(!finite_and_square_symmetric(config.initial_covariance, kTargetStateDim))
++		{
++			throw std::invalid_argument("initial_covariance must be 11x11 finite symmetric");
++		}
++
++		if(!finite_and_square_symmetric(config.measurement_covariance, kTargetMeasurementDim))
++		{
++			throw std::invalid_argument("measurement_covariance must be 4x4 finite symmetric");
++		}
++
++		const TargetModelConfig& p = config.process_noise;
++
++		auto non_negative_finite = [](double v) {
++			return std::isfinite(v) && v >= 0.0;
++		};
++
++		if(!non_negative_finite(p.translation_accel_variance)
++		   || !non_negative_finite(p.yaw_accel_variance)
++		   || !non_negative_finite(p.radius_random_walk_variance)
++		   || !non_negative_finite(p.delta_radius_random_walk_variance)
++		   || !non_negative_finite(p.delta_z_random_walk_variance))
++		{
++			throw std::invalid_argument(
++			    "process noise variances must be finite and non-negative");
++		}
++
++		if(!std::isfinite(config.min_radius_m) || !std::isfinite(config.max_radius_m)
++		   || config.min_radius_m <= 0.0 || config.max_radius_m < config.min_radius_m)
++		{
++			throw std::invalid_argument("radius bounds must satisfy 0 < min <= max");
++		}
++
++		const RadiusProfile& rp = config.radius_profile;
++
++		auto positive_finite = [](double v) {
++			return std::isfinite(v) && v > 0.0;
++		};
++
++		if(!positive_finite(rp.balance_2) || !positive_finite(rp.outpost_3)
++		   || !positive_finite(rp.base_3) || !positive_finite(rp.default_4))
++		{
++			throw std::invalid_argument("radius profile values must be finite and > 0");
++		}
++
++		// 每个 RadiusProfile 值必须落在 [min_radius_m, max_radius_m] 之内。
++		auto radius_in_range = [config](double v) {
++			return v >= config.min_radius_m && v <= config.max_radius_m;
++		};
++
++		if(!radius_in_range(rp.balance_2) || !radius_in_range(rp.outpost_3)
++		   || !radius_in_range(rp.base_3) || !radius_in_range(rp.default_4))
++		{
++			throw std::invalid_argument(
++			    "radius profile values must lie within [min_radius_m, max_radius_m]");
++		}
++	}
++
+ 	TrackerConfig make_default_tracker_config()
+ 	{
+ 		TrackerConfig c;
+@@ -63,27 +182,17 @@ namespace app::auto_aim
+ 		c.min_radius_m = 0.05;
+ 		c.max_radius_m = 0.5;
+ 
++		c.radius_profile.balance_2 = 0.2;
++		c.radius_profile.outpost_3 = 0.2765;
++		c.radius_profile.base_3 = 0.3205;
++		c.radius_profile.default_4 = 0.2;
++
+ 		return c;
+ 	}
+ 
+ 	Tracker::Tracker(const TrackerConfig& config): config_(config)
+ 	{
+-		if(config.detecting_confirm_hits < 0 || config.detecting_max_misses < 0
+-		   || config.temp_lost_max_misses < 0)
+-		{
+-			throw std::invalid_argument("hit/miss thresholds must be non-negative");
+-		}
+-
+-		if(!std::isfinite(config.max_dt_s) || config.max_dt_s < 0.0)
+-		{
+-			throw std::invalid_argument("max_dt_s must be finite and >= 0");
+-		}
+-
+-		if(!std::isfinite(config.min_radius_m) || !std::isfinite(config.max_radius_m)
+-		   || config.min_radius_m <= 0.0 || config.max_radius_m < config.min_radius_m)
+-		{
+-			throw std::invalid_argument("radius bounds must be 0 < min <= max");
+-		}
++		validate_tracker_config(config);
+ 	}
+ 
+ 	double Tracker::radius_for(const ArmorObservation& observation) const
+@@ -215,41 +324,45 @@ namespace app::auto_aim
+ 		last_timestamp_s_ = 0.0;
+ 	}
+ 
+-	std::optional<TrackedTarget> Tracker::track(const std::vector<ArmorObservation>& observations,
+-	                                            double timestamp_s)
++	TrackResult Tracker::track(const std::vector<ArmorObservation>& observations,
++	                           double timestamp_s)
+ 	{
+ 		if(!std::isfinite(timestamp_s))
+ 		{
+ 			throw std::invalid_argument("timestamp_s must be finite");
+ 		}
+ 
+-		// ---- 尚未有 target（Lost）----
++		// ---- 尚无 target：初始化 ----
+ 		if(state_ == TrackerState::Lost && !target_.has_value())
+ 		{
+ 			const std::optional<ArmorObservation> candidate = select_initial_observation(observations);
+ 
+ 			if(!candidate)
+ 			{
+-				return std::nullopt;
++				return TrackResult{timestamp_s, TrackUpdateOutcome::NotTracked, std::nullopt};
+ 			}
+ 
+ 			const double radius = radius_for(*candidate);
+ 
+ 			target_.emplace(*candidate, radius, config_.initial_covariance, config_.process_noise);
+-			state_ = TrackerState::Detecting;
+ 			hit_count_ = 1;
+ 			miss_count_ = 0;
+ 
++			// 初始化帧可能进入 Detecting（confirm_hits > 1）或 Tracking（confirm_hits == 1）。
++			state_ = (hit_count_ >= config_.detecting_confirm_hits) ? TrackerState::Tracking
++			                                                       : TrackerState::Detecting;
++
+ 			last_timestamp_s_ = timestamp_s;
+ 			has_timestamp_ = true;
+ 
+-			return make_snapshot(TrackerState::Detecting, timestamp_s);
++			TrackedTarget snapshot = make_snapshot(state_, timestamp_s);
++			return TrackResult{timestamp_s, TrackUpdateOutcome::Initialized, snapshot};
+ 		}
+ 
+ 		// ---- 已有 target ----
+ 		const double dt = has_timestamp_ ? (timestamp_s - last_timestamp_s_) : 0.0;
+ 
+-		// dt < 0（timestamp regression）或 dt 过大：reset 后重新初始化当前帧。
++		// dt < 0（timestamp regression）或 dt 过大：reset 后初始化当前帧。
+ 		if(dt < 0.0 || dt > config_.max_dt_s)
+ 		{
+ 			reset();
+@@ -259,30 +372,40 @@ namespace app::auto_aim
+ 
+ 			if(!candidate)
+ 			{
+-				return std::nullopt;
++				return TrackResult{timestamp_s, TrackUpdateOutcome::NotTracked, std::nullopt};
+ 			}
+ 
+ 			const double radius = radius_for(*candidate);
+ 
+ 			target_.emplace(*candidate, radius, config_.initial_covariance, config_.process_noise);
+-			state_ = TrackerState::Detecting;
+ 			hit_count_ = 1;
+ 			miss_count_ = 0;
+ 
++			state_ = (hit_count_ >= config_.detecting_confirm_hits) ? TrackerState::Tracking
++			                                                       : TrackerState::Detecting;
++
+ 			last_timestamp_s_ = timestamp_s;
+ 			has_timestamp_ = true;
+ 
+-			return make_snapshot(TrackerState::Detecting, timestamp_s);
++			TrackedTarget snapshot = make_snapshot(state_, timestamp_s);
++			return TrackResult{timestamp_s, TrackUpdateOutcome::Initialized, snapshot};
+ 		}
+ 
+ 		// 正常预测（dt == 0 允许，不除以 dt）。
+ 		target_->predict(dt);
+ 		last_timestamp_s_ = timestamp_s;
+ 
++		// 记录 correction 前的先验预测中心（board-switch continuity 指标用）。
++		// 注意：predict 之后即有效，即使本帧 NoAssociation 也会保留。
++		const Eigen::VectorXd& predicted_state = target_->state();
++		const Eigen::Vector3d prior_predicted_center(
++		    predicted_state(kStateX), predicted_state(kStateY), predicted_state(kStateZ));
++
+ 		// association + correction。
+ 		const std::optional<AssociationResult> assoc =
+ 		    associate(*target_, observations, config_.association);
+ 
++		const bool associated = assoc.has_value();
+ 		bool corrected = false;
+ 
+ 		if(assoc)
+@@ -291,11 +414,23 @@ namespace app::auto_aim
+ 			corrected = target_->correct(matched, assoc->armor_id, config_.measurement_covariance);
+ 		}
+ 
+-		// geometry health：失败即 Lost。
++		// 先结算本帧 outcome（与 target 生命周期分离；Lost 也保留真实结果）。
++		TrackUpdateOutcome frame_outcome = TrackUpdateOutcome::NoAssociation;
++
++		if(corrected)
++		{
++			frame_outcome = TrackUpdateOutcome::Corrected;
++		}
++		else if(associated)
++		{
++			frame_outcome = TrackUpdateOutcome::CorrectionFailed;
++		}
++
++		// geometry health：几何硬失败即 Lost（不属于 CorrectionFailed/NoAssociation 语义）。
+ 		if(!geometry_healthy())
+ 		{
+ 			reset();
+-			return std::nullopt;
++			return TrackResult{timestamp_s, TrackUpdateOutcome::NotTracked, std::nullopt};
+ 		}
+ 
+ 		// 状态机推进。
+@@ -319,7 +454,7 @@ namespace app::auto_aim
+ 				if(miss_count_ > config_.detecting_max_misses)
+ 				{
+ 					reset();
+-					return std::nullopt;
++					return TrackResult{timestamp_s, frame_outcome, std::nullopt};
+ 				}
+ 			}
+ 
+@@ -328,6 +463,13 @@ namespace app::auto_aim
+ 		case TrackerState::Tracking:
+ 			if(!corrected)
+ 			{
++				// temp_lost_max_misses == 0 时不输出 TempLost 帧，直接 Lost。
++				if(config_.temp_lost_max_misses == 0)
++				{
++					reset();
++					return TrackResult{timestamp_s, frame_outcome, std::nullopt};
++				}
++
+ 				state_ = TrackerState::TempLost;
+ 				miss_count_ = 1;
+ 			}
+@@ -347,7 +489,7 @@ namespace app::auto_aim
+ 				if(miss_count_ > config_.temp_lost_max_misses)
+ 				{
+ 					reset();
+-					return std::nullopt;
++					return TrackResult{timestamp_s, frame_outcome, std::nullopt};
+ 				}
+ 			}
+ 
+@@ -359,8 +501,9 @@ namespace app::auto_aim
+ 		}
+ 
+ 		TrackedTarget snapshot = make_snapshot(state_, timestamp_s);
++		snapshot.prior_predicted_center = prior_predicted_center;
+ 
+-		if(corrected && assoc)
++		if(corrected)
+ 		{
+ 			snapshot.has_measurement = true;
+ 			snapshot.matched_observation_index = assoc->observation_index;
+@@ -369,7 +512,7 @@ namespace app::auto_aim
+ 			snapshot.nis = target_->last_nis();
+ 		}
+ 
+-		return snapshot;
++		return TrackResult{timestamp_s, frame_outcome, snapshot};
+ 	}
+ 
+ } // namespace app::auto_aim
+\ No newline at end of file
+diff --git a/app/auto_aim/tracker.hpp b/app/auto_aim/tracker.hpp
+index dc3f11a..06afef1 100644
+--- a/app/auto_aim/tracker.hpp
++++ b/app/auto_aim/tracker.hpp
+@@ -3,17 +3,15 @@
+  * @brief Tracker 生命周期状态机（Commit 5）。
+  *
+  * 输入：vector<ArmorObservation> + timestamp（来自 caller）。
+- * 输出：optional<TrackedTarget>。
++ * 输出：TrackResult（outcome + optional<TrackedTarget>）。
+  *
+- * 状态机：
++ * 状态机（detecting_confirm_hits == 1 时初始化帧直接进入 Tracking）：
+  *   Lost ──valid observation──> Detecting ──enough hits──> Tracking
+  *        <──too many misses─────┘                             │
+  *                                                             │ miss
+  *   Lost <──timeout──────────────────────────── TempLost <───┘
+  *        └─reacquire────────────────────────────> Tracking
+  *
+- * 不依赖 Detector / Solver / cv::Mat / bbox / keypoints / OpenVINO。
+- * 不读取 TOML；配置由 task/composition 层构造后注入。
+  */
+ 
+ #ifndef TGU_ROBOCORE_2027_AUTO_AIM_TRACKER_HPP
+@@ -81,11 +79,18 @@ namespace app::auto_aim
+ 		RadiusProfile radius_profile;
+ 	};
+ 
++	/**
++	 * @brief 校验 TrackerConfig 全部字段。
++	 *
++	 * 供 Tracker 构造与 tracker_config loader 复用；校验失败抛 std::invalid_argument。
++	 */
++	void validate_tracker_config(const TrackerConfig& config);
++
+ 	/**
+ 	 * @brief 构造一个可用于离线/演示/测试 composition 的 TrackerConfig。
+ 	 *
+-	 * 注意：这是 task/composition 层的 dev helper，不是 production TOML 装载；
+-	 * 生产路径应显式从 config 解析 TrackerConfig。
++	 * 注意：这是 test/demo fixture，不是 production TOML 装载；
++	 * 生产路径应显式 load_tracker_config()。
+ 	 */
+ 	TrackerConfig make_default_tracker_config();
+ 
+@@ -103,12 +108,12 @@ namespace app::auto_aim
+ 		 * @param observations 本帧所有已完成 Solver 的装甲板观测（可为空）。
+ 		 * @param timestamp_s 本帧时间戳（必须 finite，来自 caller，不读取系统时钟）。
+ 		 *
+-		 * @return Lost 状态返回 nullopt；否则返回 TrackedTarget 快照。
++		 * @return TrackResult（outcome 与 target 生命周期分离）。
++		 *         outcome 始终反映本帧真实动作；Lost 时 target 为 nullopt。
+ 		 *
+ 		 * @throw std::invalid_argument timestamp 非 finite。
+ 		 */
+-		std::optional<TrackedTarget> track(const std::vector<ArmorObservation>& observations,
+-		                                   double timestamp_s);
++		TrackResult track(const std::vector<ArmorObservation>& observations, double timestamp_s);
+ 
+ 		/**
+ 		 * @brief 重置为 Lost / 清除 target。
+@@ -117,7 +122,8 @@ namespace app::auto_aim
+ 
+ 	private:
+ 		/**
+-		 * @brief 在 Lost 状态确定性选择一个 candidate 并初始化 Detecting。
++		 * @brief 在 Lost 状态确定性选择一个 candidate（后续初始化可能进入
++		 *        Detecting 或 Tracking，取决于 detecting_confirm_hits）。
+ 		 *
+ 		 * 排序：ArmorPriority（First 最优，Unknown 最后）→ world distance 小者
+ 		 * → source_detection_index 小者 → observation vector index 小者。
+diff --git a/app/auto_aim/tracker_config.cpp b/app/auto_aim/tracker_config.cpp
+new file mode 100644
+index 0000000..671c6e1
+--- /dev/null
++++ b/app/auto_aim/tracker_config.cpp
+@@ -0,0 +1,308 @@
++/**
++ * @file tracker_config.cpp
++ * @brief Tracker 配置加载实现。
++ */
++
++#include "app/auto_aim/tracker_config.hpp"
++
++#include <algorithm>
++#include <cmath>
++#include <limits>
++#include <optional>
++#include <string>
++#include <string_view>
++#include <utility>
++#include <vector>
++
++#include <Eigen/Core>
++
++#include "tools/logger.hpp"
++#include "tools/tomlpp.hpp"
++
++namespace app::auto_aim
++{
++
++	namespace
++	{
++
++		constexpr std::string_view kLogModule = "TRACKER_CONFIG";
++
++		std::optional<std::vector<double>> read_double_array(const toml::array* array)
++		{
++			if(array == nullptr)
++			{
++				return std::nullopt;
++			}
++
++			std::vector<double> values;
++			values.reserve(array->size());
++
++			for(const auto& element: *array)
++			{
++				const auto value = element.value<double>();
++
++				if(!value)
++				{
++					return std::nullopt;
++				}
++
++				values.push_back(*value);
++			}
++
++			return values;
++		}
++
++		std::optional<int> read_int(const toml::table& table, std::string_view key)
++		{
++			const auto value = table[key].value<std::int64_t>();
++
++			if(!value)
++			{
++				return std::nullopt;
++			}
++
++			const std::int64_t v = *value;
++			if(v < std::numeric_limits<int>::min() || v > std::numeric_limits<int>::max())
++			{
++				return std::nullopt;
++			}
++
++			return static_cast<int>(v);
++		}
++
++		std::optional<double> read_double(const toml::table& table, std::string_view key)
++		{
++			return table[key].value<double>();
++		}
++
++		bool read_diagonal_covariance(const toml::table& root, std::string_view key, int dim,
++		                              Eigen::MatrixXd& out)
++		{
++			const auto* arr = root[key].as_array();
++
++			if(arr == nullptr)
++			{
++				LOG_ERROR(kLogModule, "{} must be an array", key);
++				return false;
++			}
++
++			const auto values = read_double_array(arr);
++
++			if(!values)
++			{
++				LOG_ERROR(kLogModule, "{} must contain numeric values", key);
++				return false;
++			}
++
++			if(static_cast<int>(values->size()) != dim
++			   || !std::all_of(values->begin(), values->end(),
++			                   [](double v) { return std::isfinite(v); }))
++			{
++				LOG_ERROR(kLogModule, "{} must contain exactly {} finite values", key, dim);
++				return false;
++			}
++
++			out = Eigen::MatrixXd::Zero(dim, dim);
++
++			for(int i = 0; i < dim; ++i)
++			{
++				out(i, i) = (*values)[static_cast<std::size_t>(i)];
++			}
++
++			return true;
++		}
++
++	} // namespace
++
++	bool load_tracker_config_from_table(const toml::table& root, TrackerConfig& config)
++	{
++		const auto* lifecycle = root["lifecycle"].as_table();
++		const auto* association = root["association"].as_table();
++		const auto* process_noise = root["process_noise"].as_table();
++		const auto* radius_table = root["radius"].as_table();
++		const auto* radius_profile = root["radius_profile"].as_table();
++
++		if(lifecycle == nullptr || association == nullptr || process_noise == nullptr
++		   || radius_table == nullptr || radius_profile == nullptr)
++		{
++			LOG_ERROR(kLogModule,
++			          "missing required table: lifecycle/association/process_noise/radius/"
++			          "radius_profile");
++			return false;
++		}
++
++		TrackerConfig loaded;
++
++		// lifecycle。
++		auto confirm = read_int(*lifecycle, "detecting_confirm_hits");
++		if(!confirm || *confirm < 1)
++		{
++			LOG_ERROR(kLogModule, "detecting_confirm_hits must be >= 1");
++			return false;
++		}
++
++		auto detecting_misses = read_int(*lifecycle, "detecting_max_misses");
++		if(!detecting_misses || *detecting_misses < 0)
++		{
++			LOG_ERROR(kLogModule, "detecting_max_misses must be >= 0");
++			return false;
++		}
++
++		auto temp_misses = read_int(*lifecycle, "temp_lost_max_misses");
++		if(!temp_misses || *temp_misses < 0)
++		{
++			LOG_ERROR(kLogModule, "temp_lost_max_misses must be >= 0");
++			return false;
++		}
++
++		auto max_dt = read_double(*lifecycle, "max_dt_s");
++		if(!max_dt || !std::isfinite(*max_dt) || *max_dt <= 0.0)
++		{
++			LOG_ERROR(kLogModule, "max_dt_s must be finite and > 0");
++			return false;
++		}
++
++		loaded.detecting_confirm_hits = *confirm;
++		loaded.detecting_max_misses = *detecting_misses;
++		loaded.temp_lost_max_misses = *temp_misses;
++		loaded.max_dt_s = *max_dt;
++
++		// association。
++		auto assoc = [&](std::string_view key, double& out, bool positive) {
++			auto v = read_double(*association, key);
++
++			if(!v || !std::isfinite(*v) || (positive ? (*v <= 0.0) : (*v < 0.0)))
++			{
++				LOG_ERROR(kLogModule, "{} is invalid", key);
++				return false;
++			}
++
++			out = *v;
++			return true;
++		};
++
++		if(!assoc("max_position_error_m", loaded.association.max_position_error_m, false)
++		   || !assoc("max_yaw_error_rad", loaded.association.max_yaw_error_rad, false)
++		   || !assoc("position_score_scale_m", loaded.association.position_score_scale_m, true)
++		   || !assoc("yaw_score_scale_rad", loaded.association.yaw_score_scale_rad, true))
++		{
++			return false;
++		}
++
++		// initial covariance diag (11) 与 measurement covariance diag (4)。
++		if(!read_diagonal_covariance(root, "initial_covariance_diag", kTargetStateDim,
++		                             loaded.initial_covariance)
++		   || !read_diagonal_covariance(root, "measurement_covariance_diag", kTargetMeasurementDim,
++		                                loaded.measurement_covariance))
++		{
++			return false;
++		}
++
++		// process noise。
++		auto pnoise = [&](std::string_view key, double& out) {
++			auto v = read_double(*process_noise, key);
++
++			if(!v || !std::isfinite(*v) || *v < 0.0)
++			{
++				LOG_ERROR(kLogModule, "{} must be finite and >= 0", key);
++				return false;
++			}
++
++			out = *v;
++			return true;
++		};
++
++		if(!pnoise("translation_accel_variance",
++		           loaded.process_noise.translation_accel_variance)
++		   || !pnoise("yaw_accel_variance", loaded.process_noise.yaw_accel_variance)
++		   || !pnoise("radius_random_walk_variance",
++		              loaded.process_noise.radius_random_walk_variance)
++		   || !pnoise("delta_radius_random_walk_variance",
++		              loaded.process_noise.delta_radius_random_walk_variance)
++		   || !pnoise("delta_z_random_walk_variance",
++		              loaded.process_noise.delta_z_random_walk_variance))
++		{
++			return false;
++		}
++
++		// radius bounds。
++		auto min_r = read_double(*radius_table, "min_radius_m");
++		auto max_r = read_double(*radius_table, "max_radius_m");
++
++		if(!min_r || !max_r || !std::isfinite(*min_r) || !std::isfinite(*max_r)
++		   || *min_r <= 0.0 || *max_r < *min_r)
++		{
++			LOG_ERROR(kLogModule, "radius bounds must satisfy 0 < min <= max");
++			return false;
++		}
++
++		loaded.min_radius_m = *min_r;
++		loaded.max_radius_m = *max_r;
++
++		// radius profile（除 positive finite 外，还必须落在 [min_radius_m, max_radius_m]）。
++		auto rp = [&](std::string_view key, double& out) {
++			auto v = read_double(*radius_profile, key);
++
++			if(!v || !std::isfinite(*v) || *v <= 0.0)
++			{
++				LOG_ERROR(kLogModule, "{} must be finite and > 0", key);
++				return false;
++			}
++
++			if(*v < loaded.min_radius_m || *v > loaded.max_radius_m)
++			{
++				LOG_ERROR(kLogModule, "{} must lie within [min_radius_m, max_radius_m]", key);
++				return false;
++			}
++
++			out = *v;
++			return true;
++		};
++
++		if(!rp("balance_2", loaded.radius_profile.balance_2)
++		   || !rp("outpost_3", loaded.radius_profile.outpost_3)
++		   || !rp("base_3", loaded.radius_profile.base_3)
++		   || !rp("default_4", loaded.radius_profile.default_4))
++		{
++			return false;
++		}
++
++		config = std::move(loaded);
++
++		return true;
++	}
++
++	bool load_tracker_config(const std::string& config_path, TrackerConfig& config)
++	{
++		try
++		{
++			const toml::table root = toml::parse_file(config_path);
++
++			if(!load_tracker_config_from_table(root, config))
++			{
++				LOG_ERROR(kLogModule, "tracker configuration validation failed: {}", config_path);
++				return false;
++			}
++
++			LOG_INFO(kLogModule, "loaded tracker config: {}", config_path);
++
++			return true;
++		}
++		catch(const toml::parse_error& exception)
++		{
++			LOG_ERROR(kLogModule, "failed to parse {}: {}", config_path, exception.what());
++			return false;
++		}
++		catch(const std::exception& exception)
++		{
++			LOG_ERROR(kLogModule, "failed to load {}: {}", config_path, exception.what());
++			return false;
++		}
++		catch(...)
++		{
++			LOG_ERROR(kLogModule, "failed to load {}: unknown exception", config_path);
++			return false;
++		}
++	}
++
++} // namespace app::auto_aim
+\ No newline at end of file
+diff --git a/app/auto_aim/tracker_config.hpp b/app/auto_aim/tracker_config.hpp
+new file mode 100644
+index 0000000..1b706b3
+--- /dev/null
++++ b/app/auto_aim/tracker_config.hpp
+@@ -0,0 +1,33 @@
++/**
++ * @file tracker_config.hpp
++ * @brief Tracker 配置加载：TOML → TrackerConfig。
++ *
++ * 职责：
++ * - 校验字段存在、数值 finite、尺寸（P0/R）合法；
++ * - 加载失败返回 false，不静默 fallback。
++ */
++
++#ifndef TGU_ROBOCORE_2027_APP_AUTO_AIM_TRACKER_CONFIG_HPP
++#define TGU_ROBOCORE_2027_APP_AUTO_AIM_TRACKER_CONFIG_HPP
++
++#include <string>
++
++#include "app/auto_aim/tracker.hpp"
++#include "tools/tomlpp.hpp"
++
++namespace app::auto_aim
++{
++
++	/**
++	 * @brief 从已解析的 toml::table 加载 TrackerConfig（纯逻辑，便于单测）。
++	 */
++	bool load_tracker_config_from_table(const toml::table& root, TrackerConfig& config);
++
++	/**
++	 * @brief 从 TOML 文件加载 TrackerConfig。
++	 */
++	bool load_tracker_config(const std::string& config_path, TrackerConfig& config);
++
++} // namespace app::auto_aim
++
++#endif // TGU_ROBOCORE_2027_APP_AUTO_AIM_TRACKER_CONFIG_HPP
+\ No newline at end of file
+diff --git a/app/auto_aim/tracker_types.hpp b/app/auto_aim/tracker_types.hpp
+index 44f6404..9e6ae05 100644
+--- a/app/auto_aim/tracker_types.hpp
++++ b/app/auto_aim/tracker_types.hpp
+@@ -111,6 +111,31 @@ namespace app::auto_aim
+ 		TempLost
+ 	};
+ 
++	/**
++	 * @brief 本帧 tracking 的精确、可诊断 outcome。
++	 *
++	 * 与 target 生命周期分离，即使本帧 transition 到 Lost、target 被
++	 * 销毁，outcome 仍保留真实结果（CorrectionFailed / NoAssociation /
++	 * Corrected / Initialized / NotTracked）。
++	 */
++	enum class TrackUpdateOutcome : std::uint8_t
++	{
++		/// 本帧没有 track（从未初始化，且无 observation 可初始化）。
++		NotTracked = 0,
++
++		/// 本帧从 observation 初始化 Target（可能进入 Detecting 或 Tracking）。
++		Initialized,
++
++		/// 本帧 association 成功且 correction 成功。
++		Corrected,
++
++		/// 本帧无有效 association（miss / gate 拒绝）。
++		NoAssociation,
++
++		/// 本帧 association 成功但 EKF correction 失败。
++		CorrectionFailed
++	};
++
+ 	/**
+ 	 * @brief Tracker 输出的稳定跟踪结果（车辆级，非可见装甲板）。
+ 	 */
+@@ -130,6 +155,12 @@ namespace app::auto_aim
+ 		ArmorType type = ArmorType::Unknown;
+ 		ArmorPriority priority = ArmorPriority::Unknown;
+ 
++		/// 本帧 correction 前（predict 之后）预测出的车辆中心。
++		/// 注意：predict 之后即有效，即使本帧 NoAssociation 也会保留
++		/// 该先验预测中心（用于 board-switch 连续性指标）。
++		Eigen::Vector3d prior_predicted_center = Eigen::Vector3d::Zero();
++
++		/// 本帧后验车辆中心（correction 后，若有；否则为 predict 后先验）。
+ 		Eigen::Vector3d center_in_world = Eigen::Vector3d::Zero();
+ 		Eigen::Vector3d velocity_in_world = Eigen::Vector3d::Zero();
+ 
+@@ -149,6 +180,22 @@ namespace app::auto_aim
+ 		std::optional<double> nis;
+ 	};
+ 
++	/**
++	 * @brief 单帧 Tracker 结果（outcome 与 target 生命周期分离）。
++	 *
++	 * outcome 始终反映本帧真实发生的 tracking 动作；Lost 时 target 为
++	 * nullopt，但 outcome 仍可能是 NoAssociation / CorrectionFailed 等，
++	 * 不会退化为 NotTracked。
++	 */
++	struct TrackResult
++	{
++		double timestamp_s = 0.0;
++		TrackUpdateOutcome outcome = TrackUpdateOutcome::NotTracked;
++
++		/// 非 Lost 时存在；Lost 时为 nullopt。
++		std::optional<TrackedTarget> target;
++	};
++
+ } // namespace app::auto_aim
+ 
+ #endif // TGU_ROBOCORE_2027_AUTO_AIM_TRACKER_TYPES_HPP
+\ No newline at end of file
+diff --git a/config/app/auto_aim/tracker.toml b/config/app/auto_aim/tracker.toml
+new file mode 100644
+index 0000000..e81df1c
+--- /dev/null
++++ b/config/app/auto_aim/tracker.toml
+@@ -0,0 +1,47 @@
++# ============================================================
++# Tracker v1 production baseline config (migration defaults).
++#
++# 调参必须走 documented 流程，不硬编码进 C++。
++# ============================================================
++
++# ---- root-level scalar / array fields（必须先于任何 [table] 表头）----
++
++# 11 个对角元素（P0 先验协方差对角线，顺序：x vx y vy z vz yaw yaw_rate radius delta_radius delta_z）
++initial_covariance_diag = [
++    1.0, 1.0, 1.0,
++    1.0, 1.0, 1.0,
++    1.0, 1.0,
++    1.0, 1.0, 1.0
++]
++
++# 4 个对角元素（R 测量协方差对角线：[x, y, z, yaw]）
++measurement_covariance_diag = [1e-4, 1e-4, 1e-4, 1e-4]
++
++[lifecycle]
++detecting_confirm_hits = 10   # >= 1
++detecting_max_misses  = 5     # >= 0
++temp_lost_max_misses  = 20    # >= 0
++max_dt_s              = 0.5   # > 0
++
++[association]
++max_position_error_m   = 0.5        # >= 0
++max_yaw_error_rad      = 0.5        # >= 0
++position_score_scale_m = 1.0        # > 0
++yaw_score_scale_rad    = 1.0        # > 0
++
++[process_noise]
++translation_accel_variance        = 1.0
++yaw_accel_variance                = 1.0
++radius_random_walk_variance       = 1.0
++delta_radius_random_walk_variance = 1.0
++delta_z_random_walk_variance      = 1.0
++
++[radius]
++min_radius_m = 0.05
++max_radius_m = 0.5
++
++[radius_profile]
++balance_2 = 0.2
++outpost_3 = 0.2765
++base_3    = 0.3205
++default_4 = 0.2
+\ No newline at end of file
+diff --git a/task/CMakeLists.txt b/task/CMakeLists.txt
+index 925c86b..ec929c2 100644
+--- a/task/CMakeLists.txt
++++ b/task/CMakeLists.txt
+@@ -12,6 +12,7 @@ add_test(NAME test_extended_kalman_filter COMMAND test_extended_kalman_filter)
+ add_test(NAME test_target COMMAND test_target)
+ add_test(NAME test_association COMMAND test_association)
+ add_test(NAME test_tracker COMMAND test_tracker)
++add_test(NAME test_tracker_config COMMAND test_tracker_config)
+ 
+ add_executable(sentry sentry.cpp)
+ add_executable(read_toml test/read_toml.cpp)
+@@ -32,6 +33,7 @@ add_executable(test_extended_kalman_filter test/test_extended_kalman_filter.cpp)
+ add_executable(test_target test/test_target.cpp)
+ add_executable(test_association test/test_association.cpp)
+ add_executable(test_tracker test/test_tracker.cpp)
++add_executable(test_tracker_config test/test_tracker_config.cpp)
+ add_executable(test_tracker_replay test/test_tracker_replay.cpp)
+ add_executable(test_tracker_visual test/test_tracker_visual.cpp)
+ add_executable(test_all_pipeline test/test_all_pipeline.cpp)
+@@ -175,6 +177,13 @@ target_link_libraries(test_tracker PRIVATE
+     Eigen3::Eigen
+ )
+ 
++target_link_libraries(test_tracker_config PRIVATE
++    app
++    tools
++    ${OpenCV_LIBS}
++    Eigen3::Eigen
++)
++
+ target_compile_definitions(test_tracker_visual PRIVATE
+     PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+ )
+diff --git a/task/sentry.cpp b/task/sentry.cpp
+index df5d80f..76fb873 100644
+--- a/task/sentry.cpp
++++ b/task/sentry.cpp
+@@ -13,6 +13,7 @@
+ #include <opencv2/core.hpp>
+ 
+ #include "app/auto_aim/auto_aim.hpp"
++#include "app/auto_aim/tracker_config.hpp"
+ #include "tools/logger.hpp"
+ 
+ namespace
+@@ -96,7 +97,17 @@ int main(int argc, char** argv)
+ 	app::auto_aim::SolverConfig solver_config;
+ 	app::auto_aim::Solver solver(solver_config);
+ 
+-	app::auto_aim::Tracker tracker(app::auto_aim::make_default_tracker_config());
++	app::auto_aim::TrackerConfig tracker_config;
++
++	if(!app::auto_aim::load_tracker_config(
++	       std::string(PROJECT_SOURCE_DIR) + "/config/app/auto_aim/tracker.toml",
++	       tracker_config))
++	{
++		LOG_ERROR(MODULE, "failed to load tracker config");
++		return -1;
++	}
++
++	app::auto_aim::Tracker tracker(tracker_config);
+ 	app::auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver), std::move(tracker));
+ 
+ 	// 依赖未就绪时直接退出，避免每 10ms 空转刷 ERROR。
+@@ -123,20 +134,32 @@ int main(int argc, char** argv)
+ 
+ 		auto result = auto_aim.process(frame_context);
+ 
+-		if(result.has_target)
++		// 只有 Tracking / TempLost 才是 confirmed 控制目标（has_target == true）。
++		// Detecting 阶段即使 tracked_target 存在也只是未确认候选，不得作为控制目标。
++		if(result.has_target && result.tracked_target.has_value())
++		{
++			const auto& tracked = *result.tracked_target;
++
++			LOG_INFO(MODULE, "confirmed target center=({:.3f}, {:.3f}, {:.3f}) m, "
++			                 "vel=({:.3f}, {:.3f}, {:.3f}) m/s, yaw={:.3f} rad, has_meas={}",
++			         tracked.center_in_world.x(), tracked.center_in_world.y(),
++			         tracked.center_in_world.z(), tracked.velocity_in_world.x(),
++			         tracked.velocity_in_world.y(), tracked.velocity_in_world.z(), tracked.yaw,
++			         tracked.has_measurement ? 1 : 0);
++
++			// TODO: 串口发送给下位机（未来 Aimer/Planner 消费 tracked）
++		}
++		else if(result.tracked_target.has_value())
+ 		{
+-			// pre-tracker 阶段：仅输出 raw geometric observation，
+-			// 不把 yaw/pitch 当作最终云台控制命令。
+-			LOG_INFO(MODULE, "target detected/solved, xyz_in_gimbal=({:.3f}, {:.3f}, {:.3f}) m, "
+-			                 "distance={:.3f} m",
+-			         result.target.xyz_in_gimbal.x(), result.target.xyz_in_gimbal.y(),
+-			         result.target.xyz_in_gimbal.z(), result.distance);
+-
+-			// TODO: 串口发送给下位机
++			// Detecting：tracked_target 存在但未确认，不作为控制目标。
++			const auto& tracked = *result.tracked_target;
++			LOG_DEBUG(MODULE, "unconfirmed target (Detecting), center=({:.3f}, {:.3f}, {:.3f}) m",
++			          tracked.center_in_world.x(), tracked.center_in_world.y(),
++			          tracked.center_in_world.z());
+ 		}
+ 		else
+ 		{
+-			LOG_DEBUG(MODULE, "no target");
++			LOG_DEBUG(MODULE, "no tracked target (Lost)");
+ 		}
+ 
+ 		// TODO: 接入 Foxglove / debug image / performance profiler
+diff --git a/task/test/test_all_pipeline.cpp b/task/test/test_all_pipeline.cpp
+index f2ede71..dfbaf6d 100644
+--- a/task/test/test_all_pipeline.cpp
++++ b/task/test/test_all_pipeline.cpp
+@@ -81,7 +81,7 @@ namespace
+ 
+ 			const double norm_squared = w * w + x * x + y * y + z * z;
+ 
+-			if(norm_squared <= 1e-12)
++			if(!std::isfinite(norm_squared) || norm_squared <= 1e-12)
+ 			{
+ 				return false;
+ 			}
+@@ -148,7 +148,7 @@ namespace
+ 	                  const Eigen::VectorXd& state, std::size_t frame_index, double nis)
+ 	{
+ 		// 检测到的装甲板轮廓（绿色）。
+-		if(result.has_target && result.target.points.size() == 4)
++		if(result.has_visible_target && result.target.points.size() == 4)
+ 		{
+ 			std::vector<cv::Point> contour;
+ 			contour.reserve(4);
+@@ -171,7 +171,7 @@ namespace
+ 		cv::putText(canvas, line0, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.6,
+ 		            cv::Scalar(255, 255, 255), 1);
+ 
+-		if(result.has_target)
++		if(result.has_visible_target)
+ 		{
+ 			char line1[256];
+ 			std::snprintf(line1, sizeof(line1), "meas (%.3f, %.3f, %.3f)",
+@@ -330,7 +330,7 @@ int main(int argc, char** argv)
+ 		++processed_frames;
+ 
+ 		// 有 target：用 gimbal 位置作为测量做 update；否则只 predict。
+-		if(result.has_target && is_finite_vector3(result.target.xyz_in_gimbal))
++		if(result.has_visible_target && is_finite_vector3(result.target.xyz_in_gimbal))
+ 		{
+ 			++target_frames;
+ 
+@@ -386,7 +386,8 @@ int main(int argc, char** argv)
+ 			std::printf(
+ 			    "[%s] frame %zu: target=%d state=[%.3f,%.3f,%.3f | %.3f,%.3f,%.3f] "
+ 			    "nis=%.3f\n",
+-			    kModule, frame_index, result.has_target ? 1 : 0, x(0), x(1), x(2), x(3), x(4),
++			    kModule, frame_index, result.has_visible_target ? 1 : 0, x(0), x(1), x(2), x(3),
++			    x(4),
+ 			    x(5), ekf.last_nis());
+ 		}
+ 
+diff --git a/task/test/test_association.cpp b/task/test/test_association.cpp
+index f602b92..c64c4a0 100644
+--- a/task/test/test_association.cpp
++++ b/task/test/test_association.cpp
+@@ -482,19 +482,43 @@ namespace
+ 
+ 		const app::auto_aim::Target target = build_target(0.0, 0.0, 0.0, 0.0, 0.2);
+ 
+-		// 反序：上一个观测放后面。
+-		std::vector<app::auto_aim::ArmorObservation> obs = {
+-		    make_obs(-0.2, 0.0, 0.0, 0.0, app::auto_aim::ArmorColor::Red,
+-		             app::auto_aim::ArmorName::Four, app::auto_aim::ArmorType::Small),
+-		    make_obs(0.2, 0.0, 0.0, kPi, app::auto_aim::ArmorColor::Red,
+-		             app::auto_aim::ArmorName::Four, app::auto_aim::ArmorType::Small)};
++		// 单观测：几何位置 (-0.2,0,0), yaw=0 必须匹配 armor_id 0。
++		auto obs0 = make_obs(-0.2, 0.0, 0.0, 0.0, app::auto_aim::ArmorColor::Red,
++		                     app::auto_aim::ArmorName::Four, app::auto_aim::ArmorType::Small);
+ 
+-		// 两次关联应始终把 (0.2,0,0,yaw=pi) 识别成 armor 2（几何 ID 固定），
+-		// 与它在 vector 的位置无关。
+-		auto result = app::auto_aim::associate(target, obs, assoc_config());
+-		// 全局最优是 obs[1] armor2 或 obs[0] armor0（score 均为 0），
+-		// 但每个观测对应固定 armor_id 由几何决定，而非 vector order。
+-		runner.expect(result.has_value(), "association found");
++		// 单观测：几何位置 (0.2,0,0), yaw=-pi 必须匹配 armor_id 2。
++		auto obs2 = make_obs(0.2, 0.0, 0.0, -kPi, app::auto_aim::ArmorColor::Red,
++		                     app::auto_aim::ArmorName::Four, app::auto_aim::ArmorType::Small);
++
++		// 单测：隔离验证几何 -> armor_id 的映射是固定的。
++		{
++			auto r = app::auto_aim::associate(target, {obs0}, assoc_config());
++			runner.expect(r && r->observation_index == 0 && r->armor_id == 0,
++			              "isolated obs0 maps to armor_id 0");
++		}
++		{
++			auto r = app::auto_aim::associate(target, {obs2}, assoc_config());
++			runner.expect(r && r->observation_index == 0 && r->armor_id == 2,
++			              "isolated obs2 maps to armor_id 2");
++		}
++
++		// 重排验证：用 identity 不匹配的 distractor 占位，
++		// 验证 obs2 无论位于 index 0 还是 index 1，armor_id 恒为 2
++		// （避免浮点 tie 干扰）。
++		auto distractor = make_obs(0.2, 0.0, 0.0, -kPi, app::auto_aim::ArmorColor::Red,
++		                           app::auto_aim::ArmorName::Three,
++		                           app::auto_aim::ArmorType::Small);
++
++		{
++			auto r = app::auto_aim::associate(target, {obs2, distractor}, assoc_config());
++			runner.expect(r && r->observation_index == 0 && r->armor_id == 2,
++			              "obs2 at index 0 maps to armor_id 2");
++		}
++		{
++			auto r = app::auto_aim::associate(target, {distractor, obs2}, assoc_config());
++			runner.expect(r && r->observation_index == 1 && r->armor_id == 2,
++			              "obs2 at index 1 still maps to armor_id 2");
++		}
+ 
+ 		runner.end();
+ 	}
+diff --git a/task/test/test_auto_aim.cpp b/task/test/test_auto_aim.cpp
+index 241e1cb..2044215 100644
+--- a/task/test/test_auto_aim.cpp
++++ b/task/test/test_auto_aim.cpp
+@@ -425,35 +425,39 @@ namespace
+ 
+ 		runner.expect(result.state == auto_aim::AimState::Detecting,
+ 		              "One valid detection should produce Detecting state");
+-		runner.expect(result.has_target, "Detecting result should have a target");
+-
+-		if(result.has_target)
++		// P1-1：Detecting 阶段 has_target == false，但 tracked_target 可用。
++		runner.expect(!result.has_target, "Detecting result should have has_target == false");
++		runner.expect(result.tracked_target.has_value(),
++		              "Detecting result should still expose tracked_target");
++		runner.expect(result.tracked_target
++		                  && result.tracked_target->state == auto_aim::TrackerState::Detecting,
++		              "tracked_target state should be Detecting");
++
++		// legacy visible-armor 兼容输出仍在。
++		runner.expect(result.target.name == auto_aim::ArmorName::Three,
++		              "Target name should be three");
++		runner.expect(result.target.type == auto_aim::ArmorType::Small,
++		              "Target type should be small");
++		runner.expect(result.target.color == auto_aim::ArmorColor::Blue,
++		              "Target color should be blue");
++
++		runner.expect(result.target.points.size() == 4,
++		              "Target should keep four keypoints");
++
++		for(const auto& point: result.target.points)
+ 		{
+-			runner.expect(result.target.name == auto_aim::ArmorName::Three,
+-			              "Target name should be three");
+-			runner.expect(result.target.type == auto_aim::ArmorType::Small,
+-			              "Target type should be small");
+-			runner.expect(result.target.color == auto_aim::ArmorColor::Blue,
+-			              "Target color should be blue");
+-
+-			runner.expect(result.target.points.size() == 4,
+-			              "Target should keep four keypoints");
+-
+-			for(const auto& point: result.target.points)
+-			{
+-				runner.expect(is_finite_point(point), "Target 2D points should be finite");
+-			}
++			runner.expect(is_finite_point(point), "Target 2D points should be finite");
++		}
+ 
+-			const bool finite_xyz =
+-			    std::isfinite(result.target.xyz_in_gimbal.x())
+-			    && std::isfinite(result.target.xyz_in_gimbal.y())
+-			    && std::isfinite(result.target.xyz_in_gimbal.z());
++		const bool finite_xyz =
++		    std::isfinite(result.target.xyz_in_gimbal.x())
++		    && std::isfinite(result.target.xyz_in_gimbal.y())
++		    && std::isfinite(result.target.xyz_in_gimbal.z());
+ 
+-			runner.expect(finite_xyz, "Target xyz_in_gimbal should be finite");
++		runner.expect(finite_xyz, "Target xyz_in_gimbal should be finite");
+ 
+-			runner.expect(result.distance > 0.0,
+-			              "Solved target distance should be positive");
+-		}
++		runner.expect(result.distance > 0.0,
++		              "Solved target distance should be positive");
+ 
+ 		runner.end();
+ 	}
+@@ -479,18 +483,14 @@ namespace
+ 
+ 		runner.expect(result.state == auto_aim::AimState::Detecting,
+ 		              "Multiple detections should produce Detecting state");
+-		runner.expect(result.has_target, "Multiple detections should yield a target");
+-
+-		if(result.has_target)
+-		{
+-			// 靠近图像中心的目标中心 = (640, 370)。
+-			const cv::Point2f expected_near_center(640.0F, 370.0F);
+-
+-			const double error = cv::norm(result.target.center - expected_near_center);
++		runner.expect(!result.has_target,
++		              "Multiple detections should yield has_target == false (Detecting)");
+ 
+-			runner.expect(error < 1e-3,
+-			              "Closer-to-image-center armor should be selected preferentially");
+-		}
++		// legacy 可见装甲板选择仍应先靠近图像中心者。
++		const cv::Point2f expected_near_center(640.0F, 370.0F);
++		const double error = cv::norm(result.target.center - expected_near_center);
++		runner.expect(error < 1e-3,
++		              "Closer-to-image-center armor should be selected preferentially");
+ 
+ 		runner.end();
+ 	}
+@@ -843,7 +843,6 @@ namespace
+ 		                  && *debug.selected_armor_index == 1,
+ 		              "Pre-tracker target selection should still pick near armor (index 1)");
+ 
+-		if(result.has_target)
+ 		{
+ 			const cv::Point2f expected_near_center(640.0F, 370.0F);
+ 			runner.expect(cv::norm(result.target.center - expected_near_center) < 1e-3,
+diff --git a/task/test/test_auto_aim_pipeline.cpp b/task/test/test_auto_aim_pipeline.cpp
+index 7d40bde..36f2830 100644
+--- a/task/test/test_auto_aim_pipeline.cpp
++++ b/task/test/test_auto_aim_pipeline.cpp
+@@ -56,7 +56,7 @@ namespace
+ 	struct PipelineStats
+ 	{
+ 		std::size_t processed_frames = 0;
+-		std::size_t solved_target_frames = 0;  // has_target == true（成功 PnP）
++		std::size_t solved_target_frames = 0;  // has_visible_target == true（成功 PnP）
+ 		std::size_t no_target_frames = 0;      // NoTarget
+ 		std::size_t error_frames = 0;          // Error / NoFrame（异常路径）
+ 	};
+@@ -114,7 +114,7 @@ namespace
+ 
+ 			const double norm_squared = w * w + x * x + y * y + z * z;
+ 
+-			if(norm_squared <= 1e-12)
++			if(!std::isfinite(norm_squared) || norm_squared <= 1e-12)
+ 			{
+ 				std::printf("[%s] [WARN] zero-norm quaternion at line %zu\n", MODULE, count + 1);
+ 				return false;
+@@ -304,7 +304,7 @@ int main()
+ 		{
+ 			++stats.no_target_frames;
+ 		}
+-		else if(result.state == app::auto_aim::AimState::Detecting && result.has_target)
++		else if(result.has_visible_target)
+ 		{
+ 			++stats.solved_target_frames;
+ 
+diff --git a/task/test/test_auto_aim_visual.cpp b/task/test/test_auto_aim_visual.cpp
+index 6c44f1d..19b5369 100644
+--- a/task/test/test_auto_aim_visual.cpp
++++ b/task/test/test_auto_aim_visual.cpp
+@@ -116,7 +116,7 @@ namespace
+ 
+ 			const double norm_squared = w * w + x * x + y * y + z * z;
+ 
+-			if(norm_squared <= 1e-12)
++			if(!std::isfinite(norm_squared) || norm_squared <= 1e-12)
+ 			{
+ 				std::printf("[%s] [WARN] zero-norm quaternion at line %zu\n", MODULE, count + 1);
+ 				return false;
+@@ -216,7 +216,7 @@ namespace
+ 	void draw_solver_info(cv::Mat& canvas, const app::auto_aim::AimResult& result,
+ 	                      bool has_sync_quaternions)
+ 	{
+-		if(!result.has_target)
++		if(!result.has_visible_target)
+ 		{
+ 			return;
+ 		}
+diff --git a/task/test/test_target.cpp b/task/test/test_target.cpp
+index 1818861..d3adebd 100644
+--- a/task/test/test_target.cpp
++++ b/task/test/test_target.cpp
+@@ -586,6 +586,88 @@ namespace
+ 		runner.end();
+ 	}
+ 
++	// ============================================================
++	// Test：public helper contract（P2-3）
++	// ============================================================
++
++	void test_helper_contracts(TestRunner& runner)
++	{
++		runner.begin("Public helper contracts");
++
++		app::auto_aim::Target t = make_target(0.0, 0.0, 0.0, 0.0, 0.2);
++
++		// 正确调用不应抛异常。
++		{
++			bool threw = false;
++
++			try
++			{
++				(void)t.measurement_model(t.state(), 0);
++				(void)t.measurement_jacobian(t.state(), 0);
++			}
++			catch(...)
++			{
++				threw = true;
++			}
++
++			runner.expect(!threw, "valid inputs do not throw");
++		}
++
++		// x 维度错误。
++		{
++			bool threw = false;
++			Eigen::VectorXd bad(3);
++			bad.setZero();
++
++			try
++			{
++				(void)t.measurement_model(bad, 0);
++			}
++			catch(const std::invalid_argument&)
++			{
++				threw = true;
++			}
++
++			runner.expect(threw, "wrong x dimension throws invalid_argument");
++		}
++
++		// x 含 NaN。
++		{
++			bool threw = false;
++			Eigen::VectorXd bad = t.state();
++			bad(app::auto_aim::kStateX) = std::numeric_limits<double>::quiet_NaN();
++
++			try
++			{
++				(void)t.measurement_jacobian(bad, 0);
++			}
++			catch(const std::invalid_argument&)
++			{
++				threw = true;
++			}
++
++			runner.expect(threw, "non-finite x throws invalid_argument");
++		}
++
++		// armor_id 越界。
++		{
++			bool threw = false;
++
++			try
++			{
++				(void)t.measurement_model(t.state(), 99);
++			}
++			catch(const std::invalid_argument&)
++			{
++				threw = true;
++			}
++
++			runner.expect(threw, "armor_id out of range throws invalid_argument");
++		}
++
++		runner.end();
++	}
++
+ 	// ============================================================
+ 	// Test：only Eigen / tracker types (no Detector/Solver dependency)
+ 	// ============================================================
+@@ -624,6 +706,7 @@ int main()
+ 	test_measurement_model_exact(runner);
+ 	test_delta_geometry_exact(runner);
+ 	test_jacobian_finite_difference(runner);
++	test_helper_contracts(runner);
+ 	test_no_detector_solver_dependency(runner);
+ 
+ 	runner.print_summary();
+diff --git a/task/test/test_tracker.cpp b/task/test/test_tracker.cpp
+index b1bfdc8..7ef98ad 100644
+--- a/task/test/test_tracker.cpp
++++ b/task/test/test_tracker.cpp
+@@ -136,6 +136,15 @@ namespace
+ 		return o;
+ 	}
+ 
++	// 与 obs_armor0 同 identity 但 position 略微偏移：仍在 association 门限内，
++	// 但产生非零 innovation。配合全零 covariance，可确定性触发 correction 数值失败。
++	ArmorObservation obs_armor0_perturbed(double timestamp)
++	{
++		ArmorObservation o = obs_armor0(timestamp);
++		o.position_in_world = Eigen::Vector3d(-0.21, 0.0, 0.0);
++		return o;
++	}
++
+ 	// ============================================================
+ 	// Test：Lost empty
+ 	// ============================================================
+@@ -146,7 +155,7 @@ namespace
+ 
+ 		Tracker tracker(default_config());
+ 
+-		runner.expect(!tracker.track({}, 0.0).has_value(), "empty -> nullopt (Lost)");
++		runner.expect(!tracker.track({}, 0.0).target.has_value(), "empty -> nullopt (Lost)");
+ 
+ 		runner.end();
+ 	}
+@@ -163,15 +172,15 @@ namespace
+ 
+ 		// frame 1：Lost -> Detecting（hit=1）。
+ 		auto r1 = tracker.track({obs_armor0(0.0)}, 0.0);
+-		runner.expect(r1 && r1->state == TrackerState::Detecting, "frame1 Detecting");
++		runner.expect(r1.target && r1.target->state == TrackerState::Detecting, "frame1 Detecting");
+ 
+ 		// frame 2：hit=2，仍 Detecting。
+ 		auto r2 = tracker.track({obs_armor0(0.1)}, 0.1);
+-		runner.expect(r2 && r2->state == TrackerState::Detecting, "frame2 Detecting");
++		runner.expect(r2.target && r2.target->state == TrackerState::Detecting, "frame2 Detecting");
+ 
+ 		// frame 3：hit=3 -> Tracking。
+ 		auto r3 = tracker.track({obs_armor0(0.2)}, 0.2);
+-		runner.expect(r3 && r3->state == TrackerState::Tracking, "frame3 Tracking");
++		runner.expect(r3.target && r3.target->state == TrackerState::Tracking, "frame3 Tracking");
+ 
+ 		runner.end();
+ 	}
+@@ -191,8 +200,8 @@ namespace
+ 		tracker.track({obs_armor0(0.2)}, 0.2);
+ 
+ 		auto r = tracker.track({obs_armor0(0.3)}, 0.3);
+-		runner.expect(r && r->state == TrackerState::Tracking, "still Tracking");
+-		runner.expect(r && r->has_measurement, "has_measurement true");
++		runner.expect(r.target && r.target->state == TrackerState::Tracking, "still Tracking");
++		runner.expect(r.target && r.target->has_measurement, "has_measurement true");
+ 
+ 		runner.end();
+ 	}
+@@ -213,8 +222,8 @@ namespace
+ 
+ 		// miss：空观测（association 失败）。
+ 		auto r = tracker.track({}, 0.3);
+-		runner.expect(r && r->state == TrackerState::TempLost, "miss -> TempLost");
+-		runner.expect(r && !r->has_measurement, "has_measurement false in TempLost");
++		runner.expect(r.target && r.target->state == TrackerState::TempLost, "miss -> TempLost");
++		runner.expect(r.target && !r.target->has_measurement, "has_measurement false in TempLost");
+ 
+ 		runner.end();
+ 	}
+@@ -235,13 +244,13 @@ namespace
+ 
+ 		// 进入 TempLost。
+ 		auto r1 = tracker.track({}, 0.3);
+-		runner.expect(r1 && r1->state == TrackerState::TempLost, "TempLost after miss");
+-		runner.expect(r1 && !r1->has_measurement, "TempLost has_measurement false");
++		runner.expect(r1.target && r1.target->state == TrackerState::TempLost, "TempLost after miss");
++		runner.expect(r1.target && !r1.target->has_measurement, "TempLost has_measurement false");
+ 
+ 		// reacquire。
+ 		auto r2 = tracker.track({obs_armor0(0.4)}, 0.4);
+-		runner.expect(r2 && r2->state == TrackerState::Tracking, "reacquire -> Tracking");
+-		runner.expect(r2 && r2->has_measurement, "reacquired has_measurement true");
++		runner.expect(r2.target && r2.target->state == TrackerState::Tracking, "reacquire -> Tracking");
++		runner.expect(r2.target && r2.target->has_measurement, "reacquired has_measurement true");
+ 
+ 		runner.end();
+ 	}
+@@ -262,7 +271,9 @@ namespace
+ 		tracker.track({}, 0.4);
+ 		// miss#3 超过 temp_lost_max_misses=2 -> Lost。
+ 		auto r = tracker.track({}, 0.5);
+-		runner.expect(!r.has_value(), "TempLost timeout -> Lost (nullopt)");
++		runner.expect(!r.target.has_value(), "TempLost timeout -> Lost (nullopt)");
++		runner.expect(r.outcome == TrackUpdateOutcome::NoAssociation,
++		              "TempLost timeout outcome == NoAssociation");
+ 
+ 		runner.end();
+ 	}
+@@ -282,11 +293,14 @@ namespace
+ 		// miss#1：detecting_max_misses=1，超过则 Lost。此处 miss 后 miss_count=1，
+ 		// 由于判定是 >，第二次 miss 才会退回 Lost。
+ 		auto r1 = tracker.track({}, 0.1);
+-		runner.expect(r1 && r1->state == TrackerState::Detecting, "first detecting miss still Detecting");
++		runner.expect(r1.target && r1.target->state == TrackerState::Detecting,
++		              "first detecting miss still Detecting");
+ 
+ 		// miss#2：> detecting_max_misses -> Lost。
+ 		auto r2 = tracker.track({}, 0.2);
+-		runner.expect(!r2.has_value(), "second detecting miss -> Lost");
++		runner.expect(!r2.target.has_value(), "second detecting miss -> Lost");
++		runner.expect(r2.outcome == TrackUpdateOutcome::NoAssociation,
++		              "second detecting miss outcome == NoAssociation");
+ 
+ 		runner.end();
+ 	}
+@@ -306,7 +320,7 @@ namespace
+ 		tracker.track({obs_armor0(0.2)}, 0.2);
+ 
+ 		tracker.reset();
+-		runner.expect(!tracker.track({}, 0.3).has_value(), "after reset empty -> nullopt");
++		runner.expect(!tracker.track({}, 0.3).target.has_value(), "after reset empty -> nullopt");
+ 
+ 		runner.end();
+ 	}
+@@ -324,8 +338,9 @@ namespace
+ 		tracker.track({obs_armor0(0.0)}, 0.0);
+ 		// 同 timestamp，dt == 0，允许 association/correction，不除以 dt。
+ 		auto r = tracker.track({obs_armor0(0.0)}, 0.0);
+-		runner.expect(r.has_value(), "dt==0 still processes");
+-		runner.expect(r->state == TrackerState::Detecting || r->state == TrackerState::Tracking,
++		runner.expect(r.target.has_value(), "dt==0 still processes");
++		runner.expect(r.target->state == TrackerState::Detecting
++		                  || r.target->state == TrackerState::Tracking,
+ 		              "dt==0 state valid");
+ 
+ 		runner.end();
+@@ -345,7 +360,8 @@ namespace
+ 
+ 		// 时间回退：reset 后当前帧重新初始化。
+ 		auto r = tracker.track({obs_armor0(-0.1)}, -0.1);
+-		runner.expect(r && r->state == TrackerState::Detecting, "dt<0 reinit -> Detecting");
++		runner.expect(r.target && r.target->state == TrackerState::Detecting,
++		              "dt<0 reinit -> Detecting");
+ 
+ 		runner.end();
+ 	}
+@@ -364,7 +380,8 @@ namespace
+ 
+ 		// 远超 max_dt_s=0.5。
+ 		auto r = tracker.track({obs_armor0(2.0)}, 2.0);
+-		runner.expect(r && r->state == TrackerState::Detecting, "dt>max reset -> Detecting");
++		runner.expect(r.target && r.target->state == TrackerState::Detecting,
++		              "dt>max reset -> Detecting");
+ 
+ 		runner.end();
+ 	}
+@@ -411,8 +428,9 @@ namespace
+ 		obs_second.name = ArmorName::Three;
+ 
+ 		const auto r = tracker.track({obs_second, obs_first}, 0.0);
+-		runner.expect(r && r->state == TrackerState::Detecting, "init -> Detecting");
+-		runner.expect(r && r->name == ArmorName::Four, "selected First priority observation (Four)");
++		runner.expect(r.target && r.target->state == TrackerState::Detecting, "init -> Detecting");
++		runner.expect(r.target && r.target->name == ArmorName::Four,
++		              "selected First priority observation (Four)");
+ 
+ 		runner.end();
+ 	}
+@@ -429,19 +447,224 @@ namespace
+ 
+ 		// frame1：Detecting 无 measurement。
+ 		auto r1 = tracker.track({obs_armor0(0.0)}, 0.0);
+-		runner.expect(r1 && !r1->has_measurement, "frame1 no measurement");
+-		runner.expect(r1 && !r1->nis.has_value(), "frame1 NIS nullopt");
++		runner.expect(r1.target && !r1.target->has_measurement, "frame1 no measurement");
++		runner.expect(r1.target && !r1.target->nis.has_value(), "frame1 NIS nullopt");
+ 
+ 		// 后续帧有 measurement。
+ 		auto r2 = tracker.track({obs_armor0(0.1)}, 0.1);
+-		runner.expect(r2 && r2->has_measurement, "frame2 measurement");
++		runner.expect(r2.target && r2.target->has_measurement, "frame2 measurement");
+ 
+ 		// 在一次 miss 后，has_measurement 应变 false，且不暴露 stale NIS。
+ 		// 先确认进入 Tracking。
+ 		tracker.track({obs_armor0(0.2)}, 0.2);
+ 		auto r_miss = tracker.track({}, 0.3);
+-		runner.expect(r_miss && !r_miss->has_measurement, "miss frame no measurement");
+-		runner.expect(r_miss && !r_miss->nis.has_value(), "miss frame NIS nullopt (no stale)");
++		runner.expect(r_miss.target && !r_miss.target->has_measurement, "miss frame no measurement");
++		runner.expect(r_miss.target && !r_miss.target->nis.has_value(),
++		              "miss frame NIS nullopt (no stale)");
++
++		runner.end();
++	}
++
++	// ============================================================
++	// Test：P1-3 detecting_confirm_hits == 1 初始化帧即 Tracking
++	// ============================================================
++
++	void test_detecting_confirm_one(TestRunner& runner)
++	{
++		runner.begin("Detecting confirm hits == 1");
++
++		TrackerConfig config = default_config();
++		config.detecting_confirm_hits = 1;
++
++		Tracker tracker(config);
++
++		// 初始化帧应直接进入 Tracking，且 outcome == Initialized。
++		auto r = tracker.track({obs_armor0(0.0)}, 0.0);
++		runner.expect(r.target.has_value(), "initialization frame has target");
++		runner.expect(r.target && r.target->state == TrackerState::Tracking,
++		              "confirm=1 enters Tracking on init frame");
++		runner.expect(r.outcome == TrackUpdateOutcome::Initialized,
++		              "outcome == Initialized");
++
++		runner.end();
++	}
++
++	// ============================================================
++	// Test：P1-3 detecting_max_misses == 0 第一次 miss 即 Lost
++	// ============================================================
++
++	void test_detecting_max_misses_zero(TestRunner& runner)
++	{
++		runner.begin("Detecting max misses == 0");
++
++		TrackerConfig config = default_config();
++		config.detecting_confirm_hits = 3;
++		config.detecting_max_misses = 0;
++
++		Tracker tracker(config);
++
++		tracker.track({obs_armor0(0.0)}, 0.0); // Detecting (hit=1)
++
++		// 第一次 miss 立即 Lost。
++		auto r = tracker.track({}, 0.1);
++		runner.expect(!r.target.has_value(), "first detecting miss with max=0 -> Lost");
++		runner.expect(r.outcome == TrackUpdateOutcome::NoAssociation,
++		              "first detecting miss with max=0 outcome == NoAssociation");
++
++		runner.end();
++	}
++
++	// ============================================================
++	// Test：P1-3 temp_lost_max_misses == 0 不输出 TempLost 帧
++	// ============================================================
++
++	void test_temp_lost_max_misses_zero(TestRunner& runner)
++	{
++		runner.begin("TempLost max misses == 0");
++
++		TrackerConfig config = default_config();
++		config.detecting_confirm_hits = 1;   // 初始化即 Tracking
++		config.temp_lost_max_misses = 0;
++
++		Tracker tracker(config);
++
++		tracker.track({obs_armor0(0.0)}, 0.0); // Tracking
++
++		// 第一次 miss：temp_lost_max_misses==0，应直接 Lost，不输出 TempLost 帧。
++		auto r = tracker.track({}, 0.1);
++		runner.expect(!r.target.has_value(), "temp_lost_max_misses==0 miss -> Lost (no TempLost frame)");
++		runner.expect(r.outcome == TrackUpdateOutcome::NoAssociation,
++		              "temp_lost_max_misses==0 miss outcome == NoAssociation");
++
++		runner.end();
++	}
++
++	// ============================================================
++	// Test：P1-4 outcome 语义
++	// ============================================================
++
++	void test_outcome_semantics(TestRunner& runner)
++	{
++		runner.begin("Outcome semantics");
++
++		TrackerConfig config = default_config();
++		config.detecting_confirm_hits = 1; // 初始化即 Tracking
++		config.detecting_max_misses = 3;
++		config.temp_lost_max_misses = 3;
++
++		Tracker tracker(config);
++
++		// init。
++		auto r0 = tracker.track({obs_armor0(0.0)}, 0.0);
++		runner.expect(r0.outcome == TrackUpdateOutcome::Initialized,
++		              "init frame outcome == Initialized");
++
++		// corrected。
++		auto r1 = tracker.track({obs_armor0(0.1)}, 0.1);
++		runner.expect(r1.outcome == TrackUpdateOutcome::Corrected,
++		              "matched frame outcome == Corrected");
++		runner.expect(r1.target && r1.target->has_measurement, "corrected frame has_measurement true");
++
++		// no association（空观测）。
++		auto r2 = tracker.track({}, 0.2);
++		runner.expect(r2.outcome == TrackUpdateOutcome::NoAssociation,
++		              "empty observations -> NoAssociation");
++
++		runner.end();
++	}
++
++	// 全零 covariance / noise 配置：让 association 成功但 EKF correction
++	// 数值失败（S 奇异），用于确定性构造 CorrectionFailed 场景。
++	TrackerConfig correction_failure_config()
++	{
++		TrackerConfig c = default_config();
++		c.detecting_confirm_hits = 1; // 初始化即 Tracking
++		c.temp_lost_max_misses = 0;
++		c.detecting_max_misses = 0;
++
++		c.initial_covariance = Eigen::MatrixXd::Zero(kTargetStateDim, kTargetStateDim);
++		c.measurement_covariance =
++		    Eigen::MatrixXd::Zero(kTargetMeasurementDim, kTargetMeasurementDim);
++
++		c.process_noise.translation_accel_variance = 0.0;
++		c.process_noise.yaw_accel_variance = 0.0;
++		c.process_noise.radius_random_walk_variance = 0.0;
++		c.process_noise.delta_radius_random_walk_variance = 0.0;
++		c.process_noise.delta_z_random_walk_variance = 0.0;
++
++		return c;
++	}
++
++	// ============================================================
++	// Test：association 成功 + EKF correction 失败（保留 target）
++	// ============================================================
++
++	void test_correction_failed_keeps_target(TestRunner& runner)
++	{
++		runner.begin("Association ok + correction failed (keeps target)");
++
++		TrackerConfig config = correction_failure_config();
++		config.temp_lost_max_misses = 2; // 失败后进入 TempLost，不立即 Lost。
++
++		Tracker tracker(config);
++
++		// 初始化（confirm=1 -> Tracking）。
++		auto r0 = tracker.track({obs_armor0(0.0)}, 0.0);
++		runner.expect(r0.outcome == TrackUpdateOutcome::Initialized, "init outcome == Initialized");
++
++		// 第二次 association 成功，但 correction 数值失败（微小扰动 + 全零 cov）。
++		auto r1 = tracker.track({obs_armor0_perturbed(0.1)}, 0.1);
++		runner.expect(r1.outcome == TrackUpdateOutcome::CorrectionFailed,
++		              "correction failure outcome == CorrectionFailed");
++		runner.expect(r1.target.has_value(), "CorrectionFailed frame still has target");
++		runner.expect(r1.target && r1.target->state == TrackerState::TempLost,
++		              "correction failure transitions to TempLost");
++
++		runner.end();
++	}
++
++	// ============================================================
++	// Test：correction 失败立即 transition 到 Lost
++	// ============================================================
++
++	void test_correction_failed_immediate_lost(TestRunner& runner)
++	{
++		runner.begin("Correction failed immediately to Lost");
++
++		Tracker tracker(correction_failure_config()); // temp_lost_max_misses == 0
++
++		tracker.track({obs_armor0(0.0)}, 0.0); // Tracking
++
++		// correction 失败 + temp_lost_max_misses==0 -> Lost。
++		auto r = tracker.track({obs_armor0_perturbed(0.1)}, 0.1);
++		runner.expect(!r.target.has_value(), "correction failure immediately Lost (nullopt)");
++		runner.expect(r.outcome == TrackUpdateOutcome::CorrectionFailed,
++		              "Lost frame outcome preserved == CorrectionFailed");
++
++		runner.end();
++	}
++
++	// ============================================================
++	// Test：NoAssociation 立即 transition 到 Lost
++	// ============================================================
++
++	void test_no_association_immediate_lost(TestRunner& runner)
++	{
++		runner.begin("NoAssociation immediately to Lost");
++
++		TrackerConfig config = default_config();
++		config.detecting_confirm_hits = 1; // 初始化即 Tracking
++		config.temp_lost_max_misses = 0;
++
++		Tracker tracker(config);
++
++		tracker.track({obs_armor0(0.0)}, 0.0); // Tracking
++
++		// 空观测 -> NoAssociation；temp_lost_max_misses==0 -> Lost。
++		auto r = tracker.track({}, 0.1);
++		runner.expect(!r.target.has_value(), "NoAssociation immediately Lost (nullopt)");
++		runner.expect(r.outcome == TrackUpdateOutcome::NoAssociation,
++		              "Lost frame outcome preserved == NoAssociation");
+ 
+ 		runner.end();
+ 	}
+@@ -462,14 +685,14 @@ namespace
+ 
+ 		const Eigen::Vector3d center_before = [&]() {
+ 			auto r = tracker.track({obs_armor0(0.3)}, 0.3);
+-			return r->center_in_world;
++			return r.target->center_in_world;
+ 		}();
+ 
+ 		// 切换到对侧 armor 2：center 不应跳。
+ 		auto r_switch = tracker.track({obs_armor2(0.4)}, 0.4);
+-		runner.expect(r_switch.has_value(), "switch accepted");
++		runner.expect(r_switch.target.has_value(), "switch accepted");
+ 
+-		const double jump = (r_switch->center_in_world - center_before).norm();
++		const double jump = (r_switch.target->center_in_world - center_before).norm();
+ 		runner.expect(jump < 0.05, "vehicle center does not jump across armor switch");
+ 
+ 		runner.end();
+@@ -498,6 +721,13 @@ int main()
+ 	test_init_priority(runner);
+ 	test_stale_nis_not_exposed(runner);
+ 	test_board_switch_continuity(runner);
++	test_detecting_confirm_one(runner);
++	test_detecting_max_misses_zero(runner);
++	test_temp_lost_max_misses_zero(runner);
++	test_outcome_semantics(runner);
++	test_correction_failed_keeps_target(runner);
++	test_correction_failed_immediate_lost(runner);
++	test_no_association_immediate_lost(runner);
+ 
+ 	runner.print_summary();
+ 
+diff --git a/task/test/test_tracker_config.cpp b/task/test/test_tracker_config.cpp
+new file mode 100644
+index 0000000..33bcad4
+--- /dev/null
++++ b/task/test/test_tracker_config.cpp
+@@ -0,0 +1,379 @@
++/**
++ * @file test_tracker_config.cpp
++ * @brief TrackerConfig TOML loader 单元测试（内存 toml::parse + load_tracker_config_from_table）。
++ *
++ * 覆盖：
++ * - 合法 baseline 配置 -> success
++ * - 缺失/非法字段 -> false
++ * - 非法 radius profile（非正，或超出 [min_radius_m, max_radius_m]）-> false
++ * - 非法 covariance / noise 值 -> false
++ * - failed load 不得留下 partially-valid output config
++ */
++
++#include "app/auto_aim/tracker_config.hpp"
++#include "tools/tomlpp.hpp"
++
++#include <cmath>
++#include <cstdio>
++#include <string>
++#include <string_view>
++
++namespace
++{
++
++	namespace auto_aim = app::auto_aim;
++
++	class TestRunner
++	{
++	public:
++		void begin(std::string_view name)
++		{
++			current_test_ = name;
++			current_test_failed_ = false;
++
++			std::printf("===== %.*s =====\n", static_cast<int>(name.size()), name.data());
++		}
++
++		void expect(bool condition, std::string_view message)
++		{
++			++check_count_;
++
++			if(condition)
++			{
++				std::printf("[PASS] %.*s\n", static_cast<int>(message.size()), message.data());
++				return;
++			}
++
++			++failure_count_;
++			current_test_failed_ = true;
++			std::printf("[FAIL] %.*s\n", static_cast<int>(message.size()), message.data());
++		}
++
++		void end()
++		{
++			std::printf("[%s] %.*s\n\n", current_test_failed_ ? "FAILED" : "PASSED",
++			            static_cast<int>(current_test_.size()), current_test_.data());
++		}
++
++		[[nodiscard]] int failure_count() const noexcept
++		{
++			return failure_count_;
++		}
++
++		void print_summary() const
++		{
++			std::printf("========================================\n");
++			std::printf("Checks:   %d\n", check_count_);
++			std::printf("Failures: %d\n", failure_count_);
++			std::printf("========================================\n");
++		}
++
++	private:
++		std::string_view current_test_;
++		int check_count_ = 0;
++		int failure_count_ = 0;
++		bool current_test_failed_ = false;
++	};
++
++	const char* kValidToml = R"(
++initial_covariance_diag = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
++measurement_covariance_diag = [1e-4, 1e-4, 1e-4, 1e-4]
++
++[lifecycle]
++detecting_confirm_hits = 10
++detecting_max_misses = 5
++temp_lost_max_misses = 20
++max_dt_s = 0.5
++
++[association]
++max_position_error_m = 0.5
++max_yaw_error_rad = 0.5
++position_score_scale_m = 1.0
++yaw_score_scale_rad = 1.0
++
++[process_noise]
++translation_accel_variance = 1.0
++yaw_accel_variance = 1.0
++radius_random_walk_variance = 1.0
++delta_radius_random_walk_variance = 1.0
++delta_z_random_walk_variance = 1.0
++
++[radius]
++min_radius_m = 0.05
++max_radius_m = 0.5
++
++[radius_profile]
++balance_2 = 0.2
++outpost_3 = 0.2765
++base_3 = 0.3205
++default_4 = 0.2
++)";
++
++	const char* kMissingField = R"(
++initial_covariance_diag = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
++measurement_covariance_diag = [1e-4, 1e-4, 1e-4, 1e-4]
++
++[lifecycle]
++detecting_confirm_hits = 10
++detecting_max_misses = 5
++temp_lost_max_misses = 20
++# max_dt_s missing
++
++[association]
++max_position_error_m = 0.5
++max_yaw_error_rad = 0.5
++position_score_scale_m = 1.0
++yaw_score_scale_rad = 1.0
++
++[process_noise]
++translation_accel_variance = 1.0
++yaw_accel_variance = 1.0
++radius_random_walk_variance = 1.0
++delta_radius_random_walk_variance = 1.0
++delta_z_random_walk_variance = 1.0
++
++[radius]
++min_radius_m = 0.05
++max_radius_m = 0.5
++
++[radius_profile]
++balance_2 = 0.2
++outpost_3 = 0.2765
++base_3 = 0.3205
++default_4 = 0.2
++)";
++
++	// radius profile 超出 [min, max]。
++	const char* kInvalidRadiusProfile = R"(
++initial_covariance_diag = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
++measurement_covariance_diag = [1e-4, 1e-4, 1e-4, 1e-4]
++
++[lifecycle]
++detecting_confirm_hits = 10
++detecting_max_misses = 5
++temp_lost_max_misses = 20
++max_dt_s = 0.5
++
++[association]
++max_position_error_m = 0.5
++max_yaw_error_rad = 0.5
++position_score_scale_m = 1.0
++yaw_score_scale_rad = 1.0
++
++[process_noise]
++translation_accel_variance = 1.0
++yaw_accel_variance = 1.0
++radius_random_walk_variance = 1.0
++delta_radius_random_walk_variance = 1.0
++delta_z_random_walk_variance = 1.0
++
++[radius]
++min_radius_m = 0.05
++max_radius_m = 0.1
++
++[radius_profile]
++balance_2 = 0.2
++outpost_3 = 0.2765
++base_3 = 0.3205
++default_4 = 0.2
++)";
++
++	// negative variance。
++	const char* kInvalidNoise = R"(
++initial_covariance_diag = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
++measurement_covariance_diag = [1e-4, 1e-4, 1e-4, 1e-4]
++
++[lifecycle]
++detecting_confirm_hits = 10
++detecting_max_misses = 5
++temp_lost_max_misses = 20
++max_dt_s = 0.5
++
++[association]
++max_position_error_m = 0.5
++max_yaw_error_rad = 0.5
++position_score_scale_m = 1.0
++yaw_score_scale_rad = 1.0
++
++[process_noise]
++translation_accel_variance = -1.0
++yaw_accel_variance = 1.0
++radius_random_walk_variance = 1.0
++delta_radius_random_walk_variance = 1.0
++delta_z_random_walk_variance = 1.0
++
++[radius]
++min_radius_m = 0.05
++max_radius_m = 0.5
++
++[radius_profile]
++balance_2 = 0.2
++outpost_3 = 0.2765
++base_3 = 0.3205
++default_4 = 0.2
++)";
++
++	// measurement covariance diag 数量错误。
++	const char* kInvalidCovariance = R"(
++initial_covariance_diag = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
++measurement_covariance_diag = [1e-4, 1e-4, 1e-4]
++
++[lifecycle]
++detecting_confirm_hits = 10
++detecting_max_misses = 5
++temp_lost_max_misses = 20
++max_dt_s = 0.5
++
++[association]
++max_position_error_m = 0.5
++max_yaw_error_rad = 0.5
++position_score_scale_m = 1.0
++yaw_score_scale_rad = 1.0
++
++[process_noise]
++translation_accel_variance = 1.0
++yaw_accel_variance = 1.0
++radius_random_walk_variance = 1.0
++delta_radius_random_walk_variance = 1.0
++delta_z_random_walk_variance = 1.0
++
++[radius]
++min_radius_m = 0.05
++max_radius_m = 0.5
++
++[radius_profile]
++balance_2 = 0.2
++outpost_3 = 0.2765
++base_3 = 0.3205
++default_4 = 0.2
++)";
++
++	bool load_from_string(const std::string_view toml_text, auto_aim::TrackerConfig& config)
++	{
++		const toml::table root = toml::parse(toml_text);
++		return auto_aim::load_tracker_config_from_table(root, config);
++	}
++
++	auto_aim::TrackerConfig make_sentinel_config()
++	{
++		auto_aim::TrackerConfig c;
++		c.detecting_confirm_hits = -1;
++		c.max_dt_s = 123.0;
++		return c;
++	}
++
++	bool is_sentinel_config(const auto_aim::TrackerConfig& config)
++	{
++		return config.detecting_confirm_hits == -1 && config.max_dt_s == 123.0;
++	}
++
++	void test_valid_config(TestRunner& runner)
++	{
++		runner.begin("Valid baseline config");
++
++		auto_aim::TrackerConfig config;
++		const bool ok = load_from_string(kValidToml, config);
++
++		runner.expect(ok, "valid TOML loads successfully");
++		runner.expect(config.detecting_confirm_hits == 10, "detecting_confirm_hits == 10");
++		runner.expect(config.min_radius_m == 0.05, "min_radius_m == 0.05");
++		runner.expect(config.radius_profile.default_4 == 0.2, "default_4 == 0.2");
++
++		// 加载结果必须能通过 validate_tracker_config。
++		bool valid = true;
++		try
++		{
++			auto_aim::validate_tracker_config(config);
++		}
++		catch(...)
++		{
++			valid = false;
++		}
++		runner.expect(valid, "loaded config passes validate_tracker_config");
++
++		runner.end();
++	}
++
++	void test_missing_or_invalid_field(TestRunner& runner)
++	{
++		runner.begin("Missing / invalid field");
++
++		auto_aim::TrackerConfig config;
++		runner.expect(!load_from_string(kMissingField, config),
++		              "missing max_dt_s should fail");
++
++		runner.end();
++	}
++
++	void test_invalid_radius_profile(TestRunner& runner)
++	{
++		runner.begin("Invalid radius profile");
++
++		auto_aim::TrackerConfig config;
++		runner.expect(!load_from_string(kInvalidRadiusProfile, config),
++		              "radius profile out of [min,max] should fail");
++
++		runner.end();
++	}
++
++	void test_invalid_covariance_noise(TestRunner& runner)
++	{
++		runner.begin("Invalid covariance / noise");
++
++		auto_aim::TrackerConfig config;
++		runner.expect(!load_from_string(kInvalidCovariance, config),
++		              "measurement covariance wrong size should fail");
++
++		config = auto_aim::TrackerConfig{};
++		runner.expect(!load_from_string(kInvalidNoise, config),
++		              "negative process noise variance should fail");
++
++		runner.end();
++	}
++
++	void test_failed_load_no_partial_output(TestRunner& runner)
++	{
++		runner.begin("Failed load leaves output unchanged");
++
++		// 对每一种非法输入，output 都必须保持传入前的 sentinel 值。
++		const char* invalid_cases[] = {
++		    kMissingField, kInvalidRadiusProfile, kInvalidCovariance, kInvalidNoise};
++
++		for(const char* invalid_case: invalid_cases)
++		{
++			auto_aim::TrackerConfig config = make_sentinel_config();
++			const bool ok = load_from_string(invalid_case, config);
++
++			runner.expect(!ok, "invalid config must fail to load");
++			runner.expect(is_sentinel_config(config),
++			              "failed load must not partially overwrite output");
++		}
++
++		runner.end();
++	}
++
++} // namespace
++
++int main()
++{
++	std::printf("=== TrackerConfig Loader Test Suite ===\n\n");
++
++	TestRunner runner;
++
++	test_valid_config(runner);
++	test_missing_or_invalid_field(runner);
++	test_invalid_radius_profile(runner);
++	test_invalid_covariance_noise(runner);
++	test_failed_load_no_partial_output(runner);
++
++	runner.print_summary();
++
++	if(runner.failure_count() != 0)
++	{
++		std::printf("=== TrackerConfig loader tests failed ===\n");
++		return 1;
++	}
++
++	std::printf("=== All tracker_config tests passed ===\n");
++	return 0;
++}
+\ No newline at end of file
+diff --git a/task/test/test_tracker_replay.cpp b/task/test/test_tracker_replay.cpp
+index 223ff78..9bf1f1b 100644
+--- a/task/test/test_tracker_replay.cpp
++++ b/task/test/test_tracker_replay.cpp
+@@ -2,29 +2,22 @@
+  * @file test_tracker_replay.cpp
+  * @brief Tracker v1 真实/录制数据 replay + 结构化诊断 + quantitative validation。
+  *
+- * 这是 manual integration/replay executable，不注册进默认 CTest。
+- *
+- * 数据流：
+- *   data/demo/demo.avi (+ demo.txt 同步 quaternion)
+- *     -> OpenVINOInference -> Detector -> Solver(全部 detection)
+- *     -> AutoAim(=Detector+Solver+Tracker)
+- *     -> AimResult::tracked_target
+- *     -> 逐帧 CSV trace + 定量 summary
++ * manual integration/replay executable，不注册进默认 CTest。
+  *
+  * 输出：
+- * - data/logs/tracker_replay.csv   （每帧一行结构化诊断）
+- * - stdout quantitative summary
++ * - data/logs/tracker_replay.csv   （每帧一行，含 Lost 帧）
++ * - stdout quantitative summary + coverage 报告
+  *
+- * 注意：
+- * - 无 ground truth，因此不声称 absolute tracking accuracy；
+- *   仅验证 continuity / consistency / numerical health。
+- * - Foxglove transport 尚未接入；CSV 字段构成后续 adapter 的 stable schema。
++ * 区分：
++ * - execution success（进程退出码仅表示执行是否成功）
++ * - validation coverage（由 coverage 报告单独呈现，缺失场景打印 NOT COVERED）
+  */
+ 
+ #include "app/auto_aim/auto_aim.hpp"
+ #include "app/auto_aim/detector/detector_config.hpp"
+ #include "app/auto_aim/detector/openvino_inference.hpp"
+ #include "app/auto_aim/solver_config.hpp"
++#include "app/auto_aim/tracker_config.hpp"
+ 
+ #include <algorithm>
+ #include <cmath>
+@@ -49,27 +42,32 @@ namespace
+ 
+ 	constexpr const char* kModule = "TRACKER_REPLAY";
+ 
++	// 每个正确 correction 的 center jump 分布。
++	struct Distribution
++	{
++		std::vector<double> values;
++	};
++
+ 	struct ReplayStats
+ 	{
+ 		std::size_t frames = 0;
+ 		std::size_t frames_with_observations = 0;
+ 
+-		std::size_t successful_associations = 0;
+-		std::size_t rejected_associations = 0;
+-
+-		std::size_t successful_corrections = 0;
+-		std::size_t correction_failures = 0;
++		std::size_t initialized = 0;
++		std::size_t corrected = 0;
++		std::size_t no_association = 0;
++		std::size_t correction_failed = 0;
+ 
+-		std::size_t tracker_initializations = 0;
+ 		std::size_t lost_transitions = 0;
++		std::size_t temp_lost_to_lost = 0;
+ 		std::size_t temp_lost_frames = 0;
+ 		std::size_t reacquisitions = 0;
+ 
+ 		std::size_t armor_switch_count = 0;
+ 
+-		// board-switch continuity：matched armor_id 变化时，
+-		// 记录 correction 后 center 相对上一帧 center 的跳变量。
+-		std::vector<double> center_jumps_m;
++		Distribution correction_jumps_all;
++		Distribution correction_jumps_non_switch;
++		Distribution correction_jumps_switch;
+ 	};
+ 
+ 	bool is_finite_vector3(const Eigen::Vector3d& v)
+@@ -77,6 +75,12 @@ namespace
+ 		return std::isfinite(v.x()) && std::isfinite(v.y()) && std::isfinite(v.z());
+ 	}
+ 
++	bool is_finite_quaternion(double w, double x, double y, double z, double timestamp)
++	{
++		return std::isfinite(w) && std::isfinite(x) && std::isfinite(y) && std::isfinite(z)
++		    && std::isfinite(timestamp);
++	}
++
+ 	bool try_load_quaternions(const std::string& path,
+ 	                          std::vector<std::tuple<double, Eigen::Quaterniond>>& out)
+ 	{
+@@ -92,10 +96,19 @@ namespace
+ 
+ 		while(file >> timestamp >> w >> x >> y >> z)
+ 		{
++			// P2-2：normalize 前显式拒绝任何非 finite 分量。
++			if(!is_finite_quaternion(w, x, y, z, timestamp))
++			{
++				std::printf("[%s] [WARN] non-finite quaternion/timestamp; falling back to identity\n",
++				            kModule);
++				return false;
++			}
++
+ 			const double norm2 = w * w + x * x + y * y + z * z;
+ 
+-			if(!std::isfinite(timestamp) || norm2 <= 1e-12)
++			if(!std::isfinite(norm2) || norm2 <= 1e-12)
+ 			{
++				std::printf("[%s] [WARN] zero-norm quaternion; falling back to identity\n", kModule);
+ 				return false;
+ 			}
+ 
+@@ -107,7 +120,7 @@ namespace
+ 		return !out.empty();
+ 	}
+ 
+-	const char* tracker_state_name(app::auto_aim::TrackerState state)
++	const char* state_name(app::auto_aim::TrackerState state)
+ 	{
+ 		switch(state)
+ 		{
+@@ -124,96 +137,275 @@ namespace
+ 		}
+ 	}
+ 
+-	void write_csv_header(std::ofstream& out)
++	const char* outcome_name(app::auto_aim::TrackUpdateOutcome outcome)
+ 	{
+-		out << "timestamp_s,state,has_measurement,name,type,color,"
+-		    << "center_x,center_y,center_z,"
+-		    << "vel_x,vel_y,vel_z,"
+-		    << "yaw,yaw_rate,radius,delta_radius,delta_z,"
+-		    << "matched_observation_index,matched_armor_id,"
+-		    << "innovation_x,innovation_y,innovation_z,innovation_yaw,nis,"
+-		    << "predicted_armors\n";
++		switch(outcome)
++		{
++		case app::auto_aim::TrackUpdateOutcome::NotTracked:
++			return "NotTracked";
++		case app::auto_aim::TrackUpdateOutcome::Initialized:
++			return "Initialized";
++		case app::auto_aim::TrackUpdateOutcome::Corrected:
++			return "Corrected";
++		case app::auto_aim::TrackUpdateOutcome::NoAssociation:
++			return "NoAssociation";
++		case app::auto_aim::TrackUpdateOutcome::CorrectionFailed:
++			return "CorrectionFailed";
++		default:
++			return "Unknown";
++		}
+ 	}
+ 
+-	void write_csv_row(std::ofstream& out, const app::auto_aim::TrackedTarget& t)
++	double percentile(const std::vector<double>& values, double p)
+ 	{
+-		out << t.timestamp_s << ','
+-		    << tracker_state_name(t.state) << ','
+-		    << (t.has_measurement ? 1 : 0) << ','
+-		    << std::string(app::auto_aim::to_string(t.name)).c_str() << ','
+-		    << std::string(app::auto_aim::to_string(t.type)).c_str() << ','
+-		    << std::string(app::auto_aim::to_string(t.color)).c_str() << ','
+-		    << t.center_in_world.x() << ','
+-		    << t.center_in_world.y() << ','
+-		    << t.center_in_world.z() << ','
+-		    << t.velocity_in_world.x() << ','
+-		    << t.velocity_in_world.y() << ','
+-		    << t.velocity_in_world.z() << ','
+-		    << t.yaw << ','
+-		    << t.yaw_rate << ','
+-		    << t.radius << ','
+-		    << t.delta_radius << ','
+-		    << t.delta_z << ',';
+-
+-		if(t.matched_observation_index.has_value())
++		if(values.empty())
+ 		{
+-			out << *t.matched_observation_index << ',';
++			return std::numeric_limits<double>::quiet_NaN();
+ 		}
+-		else
++
++		auto sorted = values;
++		std::sort(sorted.begin(), sorted.end());
++
++		const double rank = p * static_cast<double>(sorted.size() - 1);
++		const std::size_t lo = static_cast<std::size_t>(std::floor(rank));
++		const std::size_t hi = static_cast<std::size_t>(std::ceil(rank));
++
++		if(lo == hi)
++		{
++			return sorted[lo];
++		}
++
++		const double frac = rank - static_cast<double>(lo);
++		return sorted[lo] * (1.0 - frac) + sorted[hi] * frac;
++	}
++
++	void print_distribution(const char* label, const Distribution& distribution)
++	{
++		const std::vector<double>& values = distribution.values;
++
++		if(values.empty())
+ 		{
+-			out << ',';
++			std::printf("  %-28s count=0 mean=NaN m p95=NaN m max=NaN m\n", label);
++			return;
+ 		}
+ 
+-		if(t.matched_armor_id.has_value())
++		const double mean = std::accumulate(values.begin(), values.end(), 0.0)
++		    / static_cast<double>(values.size());
++		const double p95 = percentile(values, 0.95);
++		const double max = *std::max_element(values.begin(), values.end());
++
++		std::printf("  %-28s count=%zu mean=%.6f m p95=%.6f m max=%.6f m\n", label, values.size(),
++		            mean, p95, max);
++	}
++
++	// ----------------- CSV（列对齐保证 post-hoc 可重建）-----------------
++
++	std::vector<std::string> base_fields(double timestamp_s,
++	                                     app::auto_aim::TrackUpdateOutcome outcome,
++	                                     const app::auto_aim::TrackedTarget* t,
++	                                     const std::vector<app::auto_aim::ArmorObservation>* obs)
++	{
++		std::vector<std::string> f;
++
++		f.push_back(std::to_string(timestamp_s));
++
++		if(t != nullptr)
+ 		{
+-			out << *t.matched_armor_id << ',';
++			f.push_back(state_name(t->state));
++			f.push_back(outcome_name(outcome));
++			f.push_back(t->has_measurement ? "1" : "0");
+ 		}
+ 		else
+ 		{
+-			out << ',';
++			f.push_back("Lost");
++			f.push_back(outcome_name(outcome));
++			f.push_back("0");
++		}
++
++		// obs_count = 真实 observations.size()。
++		const std::size_t obs_count = (obs != nullptr) ? obs->size() : 0;
++		f.push_back(std::to_string(obs_count));
++
++		// 固定两个 observation 槽（保持列数固定）。
++		for(std::size_t i = 0; i < 2; ++i)
++		{
++			if(obs != nullptr && i < obs->size())
++			{
++				const auto& o = (*obs)[i];
++				f.push_back(std::to_string(o.position_in_world.x()));
++				f.push_back(std::to_string(o.position_in_world.y()));
++				f.push_back(std::to_string(o.position_in_world.z()));
++				f.push_back(std::to_string(o.armor_yaw_in_world));
++			}
++			else
++			{
++				f.push_back("");
++				f.push_back("");
++				f.push_back("");
++				f.push_back("");
++			}
+ 		}
+ 
+-		if(t.innovation.has_value() && t.innovation->size() == 4)
++		// matched observation index / armor id。
++		if(t != nullptr)
+ 		{
+-			out << (*t.innovation)(0) << ','
+-			    << (*t.innovation)(1) << ','
+-			    << (*t.innovation)(2) << ','
+-			    << (*t.innovation)(3) << ',';
++			f.push_back(t->matched_observation_index.has_value()
++			                ? std::to_string(*t->matched_observation_index)
++			                : "");
++			f.push_back(t->matched_armor_id.has_value() ? std::to_string(*t->matched_armor_id) : "");
+ 		}
+ 		else
+ 		{
+-			out << ",,,,";
++			f.push_back("");
++			f.push_back("");
+ 		}
+ 
+-		if(t.nis.has_value())
++		// matched observation xyz/yaw（固定 4 列；有 matched index 时回填真实观测）。
++		const bool has_matched_obs = t != nullptr && t->matched_observation_index.has_value()
++		    && obs != nullptr && *t->matched_observation_index < obs->size();
++		for(int k = 0; k < 4; ++k)
+ 		{
+-			out << *t.nis;
++			if(has_matched_obs)
++			{
++				const auto& o = (*obs)[*t->matched_observation_index];
++
++				switch(k)
++				{
++				case 0:
++					f.push_back(std::to_string(o.position_in_world.x()));
++					break;
++				case 1:
++					f.push_back(std::to_string(o.position_in_world.y()));
++					break;
++				case 2:
++					f.push_back(std::to_string(o.position_in_world.z()));
++					break;
++				default:
++					f.push_back(std::to_string(o.armor_yaw_in_world));
++					break;
++				}
++			}
++			else
++			{
++				f.push_back("");
++			}
+ 		}
+ 
+-		out << ',' << t.predicted_armors.size() << '\n';
+-	}
++		if(t != nullptr)
++		{
++			f.push_back(std::to_string(t->prior_predicted_center.x()));
++			f.push_back(std::to_string(t->prior_predicted_center.y()));
++			f.push_back(std::to_string(t->prior_predicted_center.z()));
++			f.push_back(std::to_string(t->center_in_world.x()));
++			f.push_back(std::to_string(t->center_in_world.y()));
++			f.push_back(std::to_string(t->center_in_world.z()));
++			f.push_back(std::to_string(t->velocity_in_world.x()));
++			f.push_back(std::to_string(t->velocity_in_world.y()));
++			f.push_back(std::to_string(t->velocity_in_world.z()));
++			f.push_back(std::to_string(t->yaw));
++			f.push_back(std::to_string(t->yaw_rate));
++			f.push_back(std::to_string(t->radius));
++			f.push_back(std::to_string(t->delta_radius));
++			f.push_back(std::to_string(t->delta_z));
++			f.push_back(std::to_string(t->predicted_armors.size()));
++
++			// 固定 4 组 armor hypothesis 本体（id + x + y + z + yaw）。
++			for(int armor_id = 0; armor_id < 4; ++armor_id)
++			{
++				const app::auto_aim::ArmorHypothesis* hypothesis = nullptr;
+ 
+-	double percentile(const std::vector<double>& values, double p)
+-	{
+-		if(values.empty())
++				for(const auto& h: t->predicted_armors)
++				{
++					if(h.armor_id == armor_id)
++					{
++						hypothesis = &h;
++						break;
++					}
++				}
++
++				if(hypothesis != nullptr)
++				{
++					f.push_back(std::to_string(hypothesis->armor_id));
++					f.push_back(std::to_string(hypothesis->position_in_world.x()));
++					f.push_back(std::to_string(hypothesis->position_in_world.y()));
++					f.push_back(std::to_string(hypothesis->position_in_world.z()));
++					f.push_back(std::to_string(hypothesis->yaw_in_world));
++				}
++				else
++				{
++					f.push_back("");
++					f.push_back("");
++					f.push_back("");
++					f.push_back("");
++					f.push_back("");
++				}
++			}
++
++			if(t->innovation.has_value() && t->innovation->size() == 4)
++			{
++				f.push_back(std::to_string((*t->innovation)(0)));
++				f.push_back(std::to_string((*t->innovation)(1)));
++				f.push_back(std::to_string((*t->innovation)(2)));
++				f.push_back(std::to_string((*t->innovation)(3)));
++			}
++			else
++			{
++				f.push_back("");
++				f.push_back("");
++				f.push_back("");
++				f.push_back("");
++			}
++
++			f.push_back(t->nis.has_value() ? std::to_string(*t->nis) : "");
++		}
++		else
+ 		{
+-			return std::numeric_limits<double>::quiet_NaN();
++			// prior(3) + center(3) + vel(3) + yaw/yaw_rate/radius/dr/dz(5) + pred_armors(1)
++			// + hypothesis(20) + innovation(4) + nis(1) = 40 个字段。
++			for(int i = 0; i < 40; ++i)
++			{
++				f.push_back("");
++			}
+ 		}
+ 
+-		auto sorted = values;
+-		std::sort(sorted.begin(), sorted.end());
++		return f;
++	}
+ 
+-		const double rank = p * static_cast<double>(sorted.size() - 1);
+-		const std::size_t lo = static_cast<std::size_t>(std::floor(rank));
+-		const std::size_t hi = static_cast<std::size_t>(std::ceil(rank));
++	void write_csv_header(std::ofstream& out)
++	{
++		out << "timestamp_s,state,outcome,has_measurement,obs_count,"
++		    << "obs0_x,obs0_y,obs0_z,obs0_yaw,obs1_x,obs1_y,obs1_z,obs1_yaw,"
++		    << "matched_observation_index,matched_armor_id,"
++		    << "matched_obs_x,matched_obs_y,matched_obs_z,matched_obs_yaw,"
++		    << "prior_cx,prior_cy,prior_cz,"
++		    << "center_x,center_y,center_z,"
++		    << "vel_x,vel_y,vel_z,"
++		    << "yaw,yaw_rate,radius,delta_radius,delta_z,pred_armors,"
++		    << "pred0_id,pred0_x,pred0_y,pred0_z,pred0_yaw,"
++		    << "pred1_id,pred1_x,pred1_y,pred1_z,pred1_yaw,"
++		    << "pred2_id,pred2_x,pred2_y,pred2_z,pred2_yaw,"
++		    << "pred3_id,pred3_x,pred3_y,pred3_z,pred3_yaw,"
++		    << "innovation_x,innovation_y,innovation_z,innovation_yaw,nis\n";
++	}
+ 
+-		if(lo == hi)
++	void write_row(std::ofstream& out, double timestamp_s,
++	               app::auto_aim::TrackUpdateOutcome outcome,
++	               const app::auto_aim::TrackedTarget* t,
++	               const std::vector<app::auto_aim::ArmorObservation>* observations)
++	{
++		const auto fields = base_fields(timestamp_s, outcome, t, observations);
++
++		for(std::size_t i = 0; i < fields.size(); ++i)
+ 		{
+-			return sorted[lo];
++			if(i != 0)
++			{
++				out << ',';
++			}
++
++			out << fields[i];
+ 		}
+ 
+-		const double frac = rank - static_cast<double>(lo);
+-		return sorted[lo] * (1.0 - frac) + sorted[hi] * frac;
++		out << '\n';
+ 	}
+ 
+ } // namespace
+@@ -226,6 +418,7 @@ int main()
+ 	const std::string quaternion_path = project_root + "data/demo/demo.txt";
+ 	const std::string detector_config_path = project_root + "config/app/auto_aim/detector.toml";
+ 	const std::string solver_config_path = project_root + "config/app/auto_aim/solver_demo.toml";
++	const std::string tracker_config_path = project_root + "config/app/auto_aim/tracker.toml";
+ 	const std::string csv_path = project_root + "data/logs/tracker_replay.csv";
+ 
+ 	std::filesystem::create_directories(project_root + "data/logs");
+@@ -248,7 +441,7 @@ int main()
+ 	const bool has_sync_quaternions = try_load_quaternions(quaternion_path, quaternions);
+ 	if(!has_sync_quaternions)
+ 	{
+-		std::printf("[%s] [WARN] no synchronized quaternion data; using identity\n", kModule);
++		std::printf("[%s] [WARN] no valid synchronized quaternion data; using identity\n", kModule);
+ 	}
+ 
+ 	app::auto_aim::DetectorConfig detector_config;
+@@ -265,6 +458,14 @@ int main()
+ 		return 3;
+ 	}
+ 
++	// P1-2：生产 baseline 统一加载同一 tracker.toml，不做 replay-only 静默 gate 扩大。
++	app::auto_aim::TrackerConfig tracker_config;
++	if(!app::auto_aim::load_tracker_config(tracker_config_path, tracker_config))
++	{
++		std::printf("[%s] [ERROR] failed to load tracker config\n", kModule);
++		return 4;
++	}
++
+ 	auto inference = std::make_unique<app::auto_aim::OpenVINOInference>(
+ 	    detector_config.model_path, detector_config.device,
+ 	    detector_config.inference_score_threshold);
+@@ -272,30 +473,25 @@ int main()
+ 	if(!inference->is_ready())
+ 	{
+ 		std::printf("[%s] [ERROR] OpenVINO inference is not ready\n", kModule);
+-		return 4;
++		return 5;
+ 	}
+ 
+ 	app::auto_aim::Detector detector(detector_config, std::move(inference));
+ 	app::auto_aim::Solver solver(solver_config);
+-
+-	app::auto_aim::TrackerConfig tracker_config = app::auto_aim::make_default_tracker_config();
+-	// 演示：宽松 position gate 便于真实视频自适应；yaw score 保持文档化。
+-	tracker_config.association.max_position_error_m = 1.0;
+-
+ 	app::auto_aim::Tracker tracker(tracker_config);
+ 	app::auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver), std::move(tracker));
+ 
+ 	if(!auto_aim.is_ready())
+ 	{
+ 		std::printf("[%s] [ERROR] AutoAim dependencies are not ready\n", kModule);
+-		return 5;
++		return 6;
+ 	}
+ 
+ 	std::ofstream csv(csv_path);
+ 	if(!csv.is_open())
+ 	{
+ 		std::printf("[%s] [ERROR] failed to open csv: %s\n", kModule, csv_path.c_str());
+-		return 6;
++		return 7;
+ 	}
+ 	write_csv_header(csv);
+ 
+@@ -305,7 +501,6 @@ int main()
+ 	std::size_t frame_index = 0;
+ 
+ 	std::optional<int> prev_matched_armor_id;
+-	std::optional<Eigen::Vector3d> prev_center;
+ 	app::auto_aim::TrackerState prev_state = app::auto_aim::TrackerState::Lost;
+ 
+ 	while(video.read(frame))
+@@ -342,75 +537,99 @@ int main()
+ 			++stats.frames_with_observations;
+ 		}
+ 
+-		if(!result.tracked_target.has_value())
++		// outcome 计数按 result.outcome（含 Lost 帧的真实 outcome）。
++		switch(result.outcome)
+ 		{
+-			// Tracker Lost：记 lost transition（仅当之前非 Lost）。
+-			if(prev_state != app::auto_aim::TrackerState::Lost)
+-			{
+-				++stats.lost_transitions;
+-			}
+-			prev_state = app::auto_aim::TrackerState::Lost;
+-			prev_matched_armor_id.reset();
+-			prev_center.reset();
+-			++frame_index;
+-			continue;
++		case app::auto_aim::TrackUpdateOutcome::Initialized:
++			++stats.initialized;
++			break;
++		case app::auto_aim::TrackUpdateOutcome::Corrected:
++			++stats.corrected;
++			break;
++		case app::auto_aim::TrackUpdateOutcome::NoAssociation:
++			++stats.no_association;
++			break;
++		case app::auto_aim::TrackUpdateOutcome::CorrectionFailed:
++			++stats.correction_failed;
++			break;
++		case app::auto_aim::TrackUpdateOutcome::NotTracked:
++			break;
+ 		}
+ 
+-		const app::auto_aim::TrackedTarget& tracked = *result.tracked_target;
++		const bool has_tracked = result.tracked_target.has_value();
+ 
+-		write_csv_row(csv, tracked);
+-
+-		// 状态与初始化/重捕获计数。
+-		if(prev_state == app::auto_aim::TrackerState::Lost
+-		   && tracked.state != app::auto_aim::TrackerState::Lost)
++		// 写行：Lost 行也要带上 observations。
++		if(has_tracked)
+ 		{
+-			++stats.tracker_initializations;
++			write_row(csv, context.timestamp_s, result.outcome, &*result.tracked_target,
++			          &result.observations);
+ 		}
+-
+-		if(tracked.state == app::auto_aim::TrackerState::TempLost)
++		else
+ 		{
+-			++stats.temp_lost_frames;
++			write_row(csv, context.timestamp_s, result.outcome, nullptr, &result.observations);
+ 		}
+ 
+-		if(prev_state == app::auto_aim::TrackerState::TempLost
+-		   && tracked.state == app::auto_aim::TrackerState::Tracking)
++		// 状态转移计数。
++		if(has_tracked)
+ 		{
+-			++stats.reacquisitions;
+-		}
++			const app::auto_aim::TrackedTarget& tracked = *result.tracked_target;
+ 
+-		// association/correction 计数。
+-		if(tracked.has_measurement)
+-		{
+-			++stats.successful_associations;
+-			++stats.successful_corrections;
+-		}
+-		else if(tracked.state == app::auto_aim::TrackerState::Tracking
+-		        || tracked.state == app::auto_aim::TrackerState::Detecting)
+-		{
+-			// 有 target 但本帧未 association 成功：可能是 reject。
+-			++stats.rejected_associations;
+-		}
++			if(tracked.state == app::auto_aim::TrackerState::TempLost)
++			{
++				++stats.temp_lost_frames;
++			}
+ 
+-		// board-switch continuity。
+-		if(tracked.matched_armor_id.has_value())
+-		{
+-			if(prev_matched_armor_id.has_value()
+-			   && *tracked.matched_armor_id != *prev_matched_armor_id)
++			if(prev_state == app::auto_aim::TrackerState::TempLost
++			   && tracked.state == app::auto_aim::TrackerState::Tracking)
++			{
++				++stats.reacquisitions;
++			}
++
++			// board-switch continuity 三分布（仅 Corrected）。
++			if(tracked.matched_armor_id.has_value()
++			   && result.outcome == app::auto_aim::TrackUpdateOutcome::Corrected
++			   && is_finite_vector3(tracked.center_in_world)
++			   && is_finite_vector3(tracked.prior_predicted_center))
+ 			{
+-				++stats.armor_switch_count;
++				const double jump =
++				    (tracked.center_in_world - tracked.prior_predicted_center).norm();
+ 
+-				if(prev_center.has_value() && is_finite_vector3(tracked.center_in_world))
++				stats.correction_jumps_all.values.push_back(jump);
++
++				const bool is_switch = prev_matched_armor_id.has_value()
++				    && *tracked.matched_armor_id != *prev_matched_armor_id;
++
++				if(is_switch)
+ 				{
+-					const double jump = (tracked.center_in_world - *prev_center).norm();
+-					stats.center_jumps_m.push_back(jump);
++					++stats.armor_switch_count;
++					stats.correction_jumps_switch.values.push_back(jump);
+ 				}
++				else
++				{
++					stats.correction_jumps_non_switch.values.push_back(jump);
++				}
++
++				prev_matched_armor_id = tracked.matched_armor_id;
+ 			}
+ 
+-			prev_matched_armor_id = tracked.matched_armor_id;
++			prev_state = tracked.state;
+ 		}
++		else
++		{
++			// Lost：观测丢失，重置 board 连续性记忆，并统计转移。
++			if(prev_state == app::auto_aim::TrackerState::TempLost)
++			{
++				++stats.temp_lost_to_lost;
++			}
+ 
+-		prev_center = tracked.center_in_world;
+-		prev_state = tracked.state;
++			if(prev_state != app::auto_aim::TrackerState::Lost)
++			{
++				++stats.lost_transitions;
++			}
++
++			prev_state = app::auto_aim::TrackerState::Lost;
++			prev_matched_armor_id.reset();
++		}
+ 
+ 		++frame_index;
+ 	}
+@@ -423,43 +642,44 @@ int main()
+ 	std::printf("dataset:                 %s\n", video_path.c_str());
+ 	std::printf("frames:                  %zu\n", stats.frames);
+ 	std::printf("frames_with_observations:%zu\n", stats.frames_with_observations);
+-	std::printf("successful_associations: %zu\n", stats.successful_associations);
+-	std::printf("rejected_associations:   %zu\n", stats.rejected_associations);
+-	std::printf("successful_corrections:  %zu\n", stats.successful_corrections);
+-	std::printf("correction_failures:     %zu\n", stats.correction_failures);
+-	std::printf("tracker_initializations: %zu\n", stats.tracker_initializations);
++	std::printf("initialized:             %zu\n", stats.initialized);
++	std::printf("corrected:               %zu\n", stats.corrected);
++	std::printf("no_association:          %zu\n", stats.no_association);
++	std::printf("correction_failed:       %zu\n", stats.correction_failed);
+ 	std::printf("lost_transitions:        %zu\n", stats.lost_transitions);
++	std::printf("temp_lost_to_lost:       %zu\n", stats.temp_lost_to_lost);
+ 	std::printf("temp_lost_frames:        %zu\n", stats.temp_lost_frames);
+ 	std::printf("reacquisitions:          %zu\n", stats.reacquisitions);
+ 	std::printf("armor_switch_count:      %zu\n", stats.armor_switch_count);
+ 
+-	if(!stats.center_jumps_m.empty())
+-	{
+-		const double mean =
+-		    std::accumulate(stats.center_jumps_m.begin(), stats.center_jumps_m.end(), 0.0)
+-		    / static_cast<double>(stats.center_jumps_m.size());
+-		const double max = *std::max_element(stats.center_jumps_m.begin(),
+-		                                     stats.center_jumps_m.end());
+-		const double p95 = percentile(stats.center_jumps_m, 0.95);
+-
+-		std::printf("center_jump_on_switch:  count=%zu mean=%.3f m max=%.3f m p95=%.3f m\n",
+-		            stats.center_jumps_m.size(), mean, max, p95);
+-	}
+-	else
+-	{
+-		std::printf("center_jump_on_switch:  no armor switches observed\n");
+-	}
++	std::printf("\ncorrection center jump distributions:\n");
++	print_distribution("all corrections", stats.correction_jumps_all);
++	print_distribution("non-switch corrections", stats.correction_jumps_non_switch);
++	print_distribution("switch corrections", stats.correction_jumps_switch);
+ 
+-	std::printf("csv:                     %s\n", csv_path.c_str());
++	std::printf("\ncsv:                     %s\n", csv_path.c_str());
++	std::printf("===========================================================\n");
++
++	// ---- validation coverage（P1-8，与执行成功分离）----
++	std::printf("\n================= Validation Coverage =================\n");
++	auto covered = [](const char* label, bool condition) {
++		std::printf("  %-30s %s\n", label, condition ? "COVERED" : "NOT COVERED BY AVAILABLE DATA");
++	};
++
++	covered("tracker initialized", stats.initialized > 0);
++	covered("successful corrections", stats.corrected > 0);
++	covered("armor switches observed", stats.armor_switch_count > 0);
++	covered("TempLost observed", stats.temp_lost_frames > 0);
++	covered("reacquisition observed", stats.reacquisitions > 0);
++	covered("long-loss observed", stats.temp_lost_to_lost > 0);
+ 	std::printf("===========================================================\n");
+ 
+-	// 弱验收：至少处理若干帧并成功初始化 Tracker。
+ 	if(stats.frames == 0)
+ 	{
+ 		std::printf("[%s] [ERROR] no frames processed\n", kModule);
+-		return 7;
++		return 8;
+ 	}
+ 
+-	std::printf("[%s] replay finished\n", kModule);
++	std::printf("[%s] replay finished (execution succeeded)\n", kModule);
+ 	return 0;
+ }
+\ No newline at end of file
+diff --git a/task/test/test_tracker_visual.cpp b/task/test/test_tracker_visual.cpp
+index 268b982..97a0175 100644
+--- a/task/test/test_tracker_visual.cpp
++++ b/task/test/test_tracker_visual.cpp
+@@ -22,6 +22,7 @@
+ #include "app/auto_aim/detector/detector_config.hpp"
+ #include "app/auto_aim/detector/openvino_inference.hpp"
+ #include "app/auto_aim/solver_config.hpp"
++#include "app/auto_aim/tracker_config.hpp"
+ #include "tools/img_tools.hpp"
+ 
+ #include <algorithm>
+@@ -78,9 +79,16 @@ namespace
+ 
+ 		while(file >> timestamp >> w >> x >> y >> z)
+ 		{
++			// P2-2：normalize 前拒绝任何非 finite 分量。
++			if(!std::isfinite(timestamp) || !std::isfinite(w) || !std::isfinite(x)
++			   || !std::isfinite(y) || !std::isfinite(z))
++			{
++				return false;
++			}
++
+ 			const double norm2 = w * w + x * x + y * y + z * z;
+ 
+-			if(!std::isfinite(timestamp) || norm2 <= 1e-12)
++			if(!std::isfinite(norm2) || norm2 <= 1e-12)
+ 			{
+ 				return false;
+ 			}
+@@ -305,8 +313,13 @@ int main(int argc, char** argv)
+ 	app::auto_aim::Detector detector(detector_config, std::move(inference));
+ 	app::auto_aim::Solver solver(solver_config);
+ 
+-	app::auto_aim::TrackerConfig tracker_config = app::auto_aim::make_default_tracker_config();
+-	tracker_config.association.max_position_error_m = 1.0;
++	app::auto_aim::TrackerConfig tracker_config;
++	if(!app::auto_aim::load_tracker_config(
++	       project_root + "config/app/auto_aim/tracker.toml", tracker_config))
++	{
++		std::printf("[TRACKER_VISUAL] [ERROR] failed to load tracker config\n");
++		return 5;
++	}
+ 
+ 	app::auto_aim::Tracker tracker(tracker_config);
+ 	app::auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver), std::move(tracker));

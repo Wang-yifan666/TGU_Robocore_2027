@@ -136,6 +136,15 @@ namespace
 		return o;
 	}
 
+	// 与 obs_armor0 同 identity 但 position 略微偏移：仍在 association 门限内，
+	// 但产生非零 innovation。配合全零 covariance，可确定性触发 correction 数值失败。
+	ArmorObservation obs_armor0_perturbed(double timestamp)
+	{
+		ArmorObservation o = obs_armor0(timestamp);
+		o.position_in_world = Eigen::Vector3d(-0.21, 0.0, 0.0);
+		return o;
+	}
+
 	// ============================================================
 	// Test：Lost empty
 	// ============================================================
@@ -146,7 +155,7 @@ namespace
 
 		Tracker tracker(default_config());
 
-		runner.expect(!tracker.track({}, 0.0).has_value(), "empty -> nullopt (Lost)");
+		runner.expect(!tracker.track({}, 0.0).target.has_value(), "empty -> nullopt (Lost)");
 
 		runner.end();
 	}
@@ -163,15 +172,15 @@ namespace
 
 		// frame 1：Lost -> Detecting（hit=1）。
 		auto r1 = tracker.track({obs_armor0(0.0)}, 0.0);
-		runner.expect(r1 && r1->state == TrackerState::Detecting, "frame1 Detecting");
+		runner.expect(r1.target && r1.target->state == TrackerState::Detecting, "frame1 Detecting");
 
 		// frame 2：hit=2，仍 Detecting。
 		auto r2 = tracker.track({obs_armor0(0.1)}, 0.1);
-		runner.expect(r2 && r2->state == TrackerState::Detecting, "frame2 Detecting");
+		runner.expect(r2.target && r2.target->state == TrackerState::Detecting, "frame2 Detecting");
 
 		// frame 3：hit=3 -> Tracking。
 		auto r3 = tracker.track({obs_armor0(0.2)}, 0.2);
-		runner.expect(r3 && r3->state == TrackerState::Tracking, "frame3 Tracking");
+		runner.expect(r3.target && r3.target->state == TrackerState::Tracking, "frame3 Tracking");
 
 		runner.end();
 	}
@@ -191,8 +200,8 @@ namespace
 		tracker.track({obs_armor0(0.2)}, 0.2);
 
 		auto r = tracker.track({obs_armor0(0.3)}, 0.3);
-		runner.expect(r && r->state == TrackerState::Tracking, "still Tracking");
-		runner.expect(r && r->has_measurement, "has_measurement true");
+		runner.expect(r.target && r.target->state == TrackerState::Tracking, "still Tracking");
+		runner.expect(r.target && r.target->has_measurement, "has_measurement true");
 
 		runner.end();
 	}
@@ -213,8 +222,8 @@ namespace
 
 		// miss：空观测（association 失败）。
 		auto r = tracker.track({}, 0.3);
-		runner.expect(r && r->state == TrackerState::TempLost, "miss -> TempLost");
-		runner.expect(r && !r->has_measurement, "has_measurement false in TempLost");
+		runner.expect(r.target && r.target->state == TrackerState::TempLost, "miss -> TempLost");
+		runner.expect(r.target && !r.target->has_measurement, "has_measurement false in TempLost");
 
 		runner.end();
 	}
@@ -235,13 +244,13 @@ namespace
 
 		// 进入 TempLost。
 		auto r1 = tracker.track({}, 0.3);
-		runner.expect(r1 && r1->state == TrackerState::TempLost, "TempLost after miss");
-		runner.expect(r1 && !r1->has_measurement, "TempLost has_measurement false");
+		runner.expect(r1.target && r1.target->state == TrackerState::TempLost, "TempLost after miss");
+		runner.expect(r1.target && !r1.target->has_measurement, "TempLost has_measurement false");
 
 		// reacquire。
 		auto r2 = tracker.track({obs_armor0(0.4)}, 0.4);
-		runner.expect(r2 && r2->state == TrackerState::Tracking, "reacquire -> Tracking");
-		runner.expect(r2 && r2->has_measurement, "reacquired has_measurement true");
+		runner.expect(r2.target && r2.target->state == TrackerState::Tracking, "reacquire -> Tracking");
+		runner.expect(r2.target && r2.target->has_measurement, "reacquired has_measurement true");
 
 		runner.end();
 	}
@@ -262,7 +271,9 @@ namespace
 		tracker.track({}, 0.4);
 		// miss#3 超过 temp_lost_max_misses=2 -> Lost。
 		auto r = tracker.track({}, 0.5);
-		runner.expect(!r.has_value(), "TempLost timeout -> Lost (nullopt)");
+		runner.expect(!r.target.has_value(), "TempLost timeout -> Lost (nullopt)");
+		runner.expect(r.outcome == TrackUpdateOutcome::NoAssociation,
+		              "TempLost timeout outcome == NoAssociation");
 
 		runner.end();
 	}
@@ -282,11 +293,14 @@ namespace
 		// miss#1：detecting_max_misses=1，超过则 Lost。此处 miss 后 miss_count=1，
 		// 由于判定是 >，第二次 miss 才会退回 Lost。
 		auto r1 = tracker.track({}, 0.1);
-		runner.expect(r1 && r1->state == TrackerState::Detecting, "first detecting miss still Detecting");
+		runner.expect(r1.target && r1.target->state == TrackerState::Detecting,
+		              "first detecting miss still Detecting");
 
 		// miss#2：> detecting_max_misses -> Lost。
 		auto r2 = tracker.track({}, 0.2);
-		runner.expect(!r2.has_value(), "second detecting miss -> Lost");
+		runner.expect(!r2.target.has_value(), "second detecting miss -> Lost");
+		runner.expect(r2.outcome == TrackUpdateOutcome::NoAssociation,
+		              "second detecting miss outcome == NoAssociation");
 
 		runner.end();
 	}
@@ -306,7 +320,7 @@ namespace
 		tracker.track({obs_armor0(0.2)}, 0.2);
 
 		tracker.reset();
-		runner.expect(!tracker.track({}, 0.3).has_value(), "after reset empty -> nullopt");
+		runner.expect(!tracker.track({}, 0.3).target.has_value(), "after reset empty -> nullopt");
 
 		runner.end();
 	}
@@ -324,8 +338,9 @@ namespace
 		tracker.track({obs_armor0(0.0)}, 0.0);
 		// 同 timestamp，dt == 0，允许 association/correction，不除以 dt。
 		auto r = tracker.track({obs_armor0(0.0)}, 0.0);
-		runner.expect(r.has_value(), "dt==0 still processes");
-		runner.expect(r->state == TrackerState::Detecting || r->state == TrackerState::Tracking,
+		runner.expect(r.target.has_value(), "dt==0 still processes");
+		runner.expect(r.target->state == TrackerState::Detecting
+		                  || r.target->state == TrackerState::Tracking,
 		              "dt==0 state valid");
 
 		runner.end();
@@ -345,7 +360,8 @@ namespace
 
 		// 时间回退：reset 后当前帧重新初始化。
 		auto r = tracker.track({obs_armor0(-0.1)}, -0.1);
-		runner.expect(r && r->state == TrackerState::Detecting, "dt<0 reinit -> Detecting");
+		runner.expect(r.target && r.target->state == TrackerState::Detecting,
+		              "dt<0 reinit -> Detecting");
 
 		runner.end();
 	}
@@ -364,7 +380,8 @@ namespace
 
 		// 远超 max_dt_s=0.5。
 		auto r = tracker.track({obs_armor0(2.0)}, 2.0);
-		runner.expect(r && r->state == TrackerState::Detecting, "dt>max reset -> Detecting");
+		runner.expect(r.target && r.target->state == TrackerState::Detecting,
+		              "dt>max reset -> Detecting");
 
 		runner.end();
 	}
@@ -411,8 +428,9 @@ namespace
 		obs_second.name = ArmorName::Three;
 
 		const auto r = tracker.track({obs_second, obs_first}, 0.0);
-		runner.expect(r && r->state == TrackerState::Detecting, "init -> Detecting");
-		runner.expect(r && r->name == ArmorName::Four, "selected First priority observation (Four)");
+		runner.expect(r.target && r.target->state == TrackerState::Detecting, "init -> Detecting");
+		runner.expect(r.target && r.target->name == ArmorName::Four,
+		              "selected First priority observation (Four)");
 
 		runner.end();
 	}
@@ -429,19 +447,224 @@ namespace
 
 		// frame1：Detecting 无 measurement。
 		auto r1 = tracker.track({obs_armor0(0.0)}, 0.0);
-		runner.expect(r1 && !r1->has_measurement, "frame1 no measurement");
-		runner.expect(r1 && !r1->nis.has_value(), "frame1 NIS nullopt");
+		runner.expect(r1.target && !r1.target->has_measurement, "frame1 no measurement");
+		runner.expect(r1.target && !r1.target->nis.has_value(), "frame1 NIS nullopt");
 
 		// 后续帧有 measurement。
 		auto r2 = tracker.track({obs_armor0(0.1)}, 0.1);
-		runner.expect(r2 && r2->has_measurement, "frame2 measurement");
+		runner.expect(r2.target && r2.target->has_measurement, "frame2 measurement");
 
 		// 在一次 miss 后，has_measurement 应变 false，且不暴露 stale NIS。
 		// 先确认进入 Tracking。
 		tracker.track({obs_armor0(0.2)}, 0.2);
 		auto r_miss = tracker.track({}, 0.3);
-		runner.expect(r_miss && !r_miss->has_measurement, "miss frame no measurement");
-		runner.expect(r_miss && !r_miss->nis.has_value(), "miss frame NIS nullopt (no stale)");
+		runner.expect(r_miss.target && !r_miss.target->has_measurement, "miss frame no measurement");
+		runner.expect(r_miss.target && !r_miss.target->nis.has_value(),
+		              "miss frame NIS nullopt (no stale)");
+
+		runner.end();
+	}
+
+	// ============================================================
+	// Test：P1-3 detecting_confirm_hits == 1 初始化帧即 Tracking
+	// ============================================================
+
+	void test_detecting_confirm_one(TestRunner& runner)
+	{
+		runner.begin("Detecting confirm hits == 1");
+
+		TrackerConfig config = default_config();
+		config.detecting_confirm_hits = 1;
+
+		Tracker tracker(config);
+
+		// 初始化帧应直接进入 Tracking，且 outcome == Initialized。
+		auto r = tracker.track({obs_armor0(0.0)}, 0.0);
+		runner.expect(r.target.has_value(), "initialization frame has target");
+		runner.expect(r.target && r.target->state == TrackerState::Tracking,
+		              "confirm=1 enters Tracking on init frame");
+		runner.expect(r.outcome == TrackUpdateOutcome::Initialized,
+		              "outcome == Initialized");
+
+		runner.end();
+	}
+
+	// ============================================================
+	// Test：P1-3 detecting_max_misses == 0 第一次 miss 即 Lost
+	// ============================================================
+
+	void test_detecting_max_misses_zero(TestRunner& runner)
+	{
+		runner.begin("Detecting max misses == 0");
+
+		TrackerConfig config = default_config();
+		config.detecting_confirm_hits = 3;
+		config.detecting_max_misses = 0;
+
+		Tracker tracker(config);
+
+		tracker.track({obs_armor0(0.0)}, 0.0); // Detecting (hit=1)
+
+		// 第一次 miss 立即 Lost。
+		auto r = tracker.track({}, 0.1);
+		runner.expect(!r.target.has_value(), "first detecting miss with max=0 -> Lost");
+		runner.expect(r.outcome == TrackUpdateOutcome::NoAssociation,
+		              "first detecting miss with max=0 outcome == NoAssociation");
+
+		runner.end();
+	}
+
+	// ============================================================
+	// Test：P1-3 temp_lost_max_misses == 0 不输出 TempLost 帧
+	// ============================================================
+
+	void test_temp_lost_max_misses_zero(TestRunner& runner)
+	{
+		runner.begin("TempLost max misses == 0");
+
+		TrackerConfig config = default_config();
+		config.detecting_confirm_hits = 1;   // 初始化即 Tracking
+		config.temp_lost_max_misses = 0;
+
+		Tracker tracker(config);
+
+		tracker.track({obs_armor0(0.0)}, 0.0); // Tracking
+
+		// 第一次 miss：temp_lost_max_misses==0，应直接 Lost，不输出 TempLost 帧。
+		auto r = tracker.track({}, 0.1);
+		runner.expect(!r.target.has_value(), "temp_lost_max_misses==0 miss -> Lost (no TempLost frame)");
+		runner.expect(r.outcome == TrackUpdateOutcome::NoAssociation,
+		              "temp_lost_max_misses==0 miss outcome == NoAssociation");
+
+		runner.end();
+	}
+
+	// ============================================================
+	// Test：P1-4 outcome 语义
+	// ============================================================
+
+	void test_outcome_semantics(TestRunner& runner)
+	{
+		runner.begin("Outcome semantics");
+
+		TrackerConfig config = default_config();
+		config.detecting_confirm_hits = 1; // 初始化即 Tracking
+		config.detecting_max_misses = 3;
+		config.temp_lost_max_misses = 3;
+
+		Tracker tracker(config);
+
+		// init。
+		auto r0 = tracker.track({obs_armor0(0.0)}, 0.0);
+		runner.expect(r0.outcome == TrackUpdateOutcome::Initialized,
+		              "init frame outcome == Initialized");
+
+		// corrected。
+		auto r1 = tracker.track({obs_armor0(0.1)}, 0.1);
+		runner.expect(r1.outcome == TrackUpdateOutcome::Corrected,
+		              "matched frame outcome == Corrected");
+		runner.expect(r1.target && r1.target->has_measurement, "corrected frame has_measurement true");
+
+		// no association（空观测）。
+		auto r2 = tracker.track({}, 0.2);
+		runner.expect(r2.outcome == TrackUpdateOutcome::NoAssociation,
+		              "empty observations -> NoAssociation");
+
+		runner.end();
+	}
+
+	// 全零 covariance / noise 配置：让 association 成功但 EKF correction
+	// 数值失败（S 奇异），用于确定性构造 CorrectionFailed 场景。
+	TrackerConfig correction_failure_config()
+	{
+		TrackerConfig c = default_config();
+		c.detecting_confirm_hits = 1; // 初始化即 Tracking
+		c.temp_lost_max_misses = 0;
+		c.detecting_max_misses = 0;
+
+		c.initial_covariance = Eigen::MatrixXd::Zero(kTargetStateDim, kTargetStateDim);
+		c.measurement_covariance =
+		    Eigen::MatrixXd::Zero(kTargetMeasurementDim, kTargetMeasurementDim);
+
+		c.process_noise.translation_accel_variance = 0.0;
+		c.process_noise.yaw_accel_variance = 0.0;
+		c.process_noise.radius_random_walk_variance = 0.0;
+		c.process_noise.delta_radius_random_walk_variance = 0.0;
+		c.process_noise.delta_z_random_walk_variance = 0.0;
+
+		return c;
+	}
+
+	// ============================================================
+	// Test：association 成功 + EKF correction 失败（保留 target）
+	// ============================================================
+
+	void test_correction_failed_keeps_target(TestRunner& runner)
+	{
+		runner.begin("Association ok + correction failed (keeps target)");
+
+		TrackerConfig config = correction_failure_config();
+		config.temp_lost_max_misses = 2; // 失败后进入 TempLost，不立即 Lost。
+
+		Tracker tracker(config);
+
+		// 初始化（confirm=1 -> Tracking）。
+		auto r0 = tracker.track({obs_armor0(0.0)}, 0.0);
+		runner.expect(r0.outcome == TrackUpdateOutcome::Initialized, "init outcome == Initialized");
+
+		// 第二次 association 成功，但 correction 数值失败（微小扰动 + 全零 cov）。
+		auto r1 = tracker.track({obs_armor0_perturbed(0.1)}, 0.1);
+		runner.expect(r1.outcome == TrackUpdateOutcome::CorrectionFailed,
+		              "correction failure outcome == CorrectionFailed");
+		runner.expect(r1.target.has_value(), "CorrectionFailed frame still has target");
+		runner.expect(r1.target && r1.target->state == TrackerState::TempLost,
+		              "correction failure transitions to TempLost");
+
+		runner.end();
+	}
+
+	// ============================================================
+	// Test：correction 失败立即 transition 到 Lost
+	// ============================================================
+
+	void test_correction_failed_immediate_lost(TestRunner& runner)
+	{
+		runner.begin("Correction failed immediately to Lost");
+
+		Tracker tracker(correction_failure_config()); // temp_lost_max_misses == 0
+
+		tracker.track({obs_armor0(0.0)}, 0.0); // Tracking
+
+		// correction 失败 + temp_lost_max_misses==0 -> Lost。
+		auto r = tracker.track({obs_armor0_perturbed(0.1)}, 0.1);
+		runner.expect(!r.target.has_value(), "correction failure immediately Lost (nullopt)");
+		runner.expect(r.outcome == TrackUpdateOutcome::CorrectionFailed,
+		              "Lost frame outcome preserved == CorrectionFailed");
+
+		runner.end();
+	}
+
+	// ============================================================
+	// Test：NoAssociation 立即 transition 到 Lost
+	// ============================================================
+
+	void test_no_association_immediate_lost(TestRunner& runner)
+	{
+		runner.begin("NoAssociation immediately to Lost");
+
+		TrackerConfig config = default_config();
+		config.detecting_confirm_hits = 1; // 初始化即 Tracking
+		config.temp_lost_max_misses = 0;
+
+		Tracker tracker(config);
+
+		tracker.track({obs_armor0(0.0)}, 0.0); // Tracking
+
+		// 空观测 -> NoAssociation；temp_lost_max_misses==0 -> Lost。
+		auto r = tracker.track({}, 0.1);
+		runner.expect(!r.target.has_value(), "NoAssociation immediately Lost (nullopt)");
+		runner.expect(r.outcome == TrackUpdateOutcome::NoAssociation,
+		              "Lost frame outcome preserved == NoAssociation");
 
 		runner.end();
 	}
@@ -462,14 +685,14 @@ namespace
 
 		const Eigen::Vector3d center_before = [&]() {
 			auto r = tracker.track({obs_armor0(0.3)}, 0.3);
-			return r->center_in_world;
+			return r.target->center_in_world;
 		}();
 
 		// 切换到对侧 armor 2：center 不应跳。
 		auto r_switch = tracker.track({obs_armor2(0.4)}, 0.4);
-		runner.expect(r_switch.has_value(), "switch accepted");
+		runner.expect(r_switch.target.has_value(), "switch accepted");
 
-		const double jump = (r_switch->center_in_world - center_before).norm();
+		const double jump = (r_switch.target->center_in_world - center_before).norm();
 		runner.expect(jump < 0.05, "vehicle center does not jump across armor switch");
 
 		runner.end();
@@ -498,6 +721,13 @@ int main()
 	test_init_priority(runner);
 	test_stale_nis_not_exposed(runner);
 	test_board_switch_continuity(runner);
+	test_detecting_confirm_one(runner);
+	test_detecting_max_misses_zero(runner);
+	test_temp_lost_max_misses_zero(runner);
+	test_outcome_semantics(runner);
+	test_correction_failed_keeps_target(runner);
+	test_correction_failed_immediate_lost(runner);
+	test_no_association_immediate_lost(runner);
 
 	runner.print_summary();
 

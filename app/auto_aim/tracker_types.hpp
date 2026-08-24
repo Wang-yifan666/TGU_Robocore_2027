@@ -112,6 +112,31 @@ namespace app::auto_aim
 	};
 
 	/**
+	 * @brief 本帧 tracking 的精确、可诊断 outcome。
+	 *
+	 * 与 target 生命周期分离，即使本帧 transition 到 Lost、target 被
+	 * 销毁，outcome 仍保留真实结果（CorrectionFailed / NoAssociation /
+	 * Corrected / Initialized / NotTracked）。
+	 */
+	enum class TrackUpdateOutcome : std::uint8_t
+	{
+		/// 本帧没有 track（从未初始化，且无 observation 可初始化）。
+		NotTracked = 0,
+
+		/// 本帧从 observation 初始化 Target（可能进入 Detecting 或 Tracking）。
+		Initialized,
+
+		/// 本帧 association 成功且 correction 成功。
+		Corrected,
+
+		/// 本帧无有效 association（miss / gate 拒绝）。
+		NoAssociation,
+
+		/// 本帧 association 成功但 EKF correction 失败。
+		CorrectionFailed
+	};
+
+	/**
 	 * @brief Tracker 输出的稳定跟踪结果（车辆级，非可见装甲板）。
 	 */
 	struct TrackedTarget
@@ -130,6 +155,12 @@ namespace app::auto_aim
 		ArmorType type = ArmorType::Unknown;
 		ArmorPriority priority = ArmorPriority::Unknown;
 
+		/// 本帧 correction 前（predict 之后）预测出的车辆中心。
+		/// 注意：predict 之后即有效，即使本帧 NoAssociation 也会保留
+		/// 该先验预测中心（用于 board-switch 连续性指标）。
+		Eigen::Vector3d prior_predicted_center = Eigen::Vector3d::Zero();
+
+		/// 本帧后验车辆中心（correction 后，若有；否则为 predict 后先验）。
 		Eigen::Vector3d center_in_world = Eigen::Vector3d::Zero();
 		Eigen::Vector3d velocity_in_world = Eigen::Vector3d::Zero();
 
@@ -147,6 +178,22 @@ namespace app::auto_aim
 
 		std::optional<Eigen::VectorXd> innovation;
 		std::optional<double> nis;
+	};
+
+	/**
+	 * @brief 单帧 Tracker 结果（outcome 与 target 生命周期分离）。
+	 *
+	 * outcome 始终反映本帧真实发生的 tracking 动作；Lost 时 target 为
+	 * nullopt，但 outcome 仍可能是 NoAssociation / CorrectionFailed 等，
+	 * 不会退化为 NotTracked。
+	 */
+	struct TrackResult
+	{
+		double timestamp_s = 0.0;
+		TrackUpdateOutcome outcome = TrackUpdateOutcome::NotTracked;
+
+		/// 非 Lost 时存在；Lost 时为 nullopt。
+		std::optional<TrackedTarget> target;
 	};
 
 } // namespace app::auto_aim

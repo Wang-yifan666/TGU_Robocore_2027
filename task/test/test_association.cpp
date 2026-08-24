@@ -482,19 +482,43 @@ namespace
 
 		const app::auto_aim::Target target = build_target(0.0, 0.0, 0.0, 0.0, 0.2);
 
-		// 反序：上一个观测放后面。
-		std::vector<app::auto_aim::ArmorObservation> obs = {
-		    make_obs(-0.2, 0.0, 0.0, 0.0, app::auto_aim::ArmorColor::Red,
-		             app::auto_aim::ArmorName::Four, app::auto_aim::ArmorType::Small),
-		    make_obs(0.2, 0.0, 0.0, kPi, app::auto_aim::ArmorColor::Red,
-		             app::auto_aim::ArmorName::Four, app::auto_aim::ArmorType::Small)};
+		// 单观测：几何位置 (-0.2,0,0), yaw=0 必须匹配 armor_id 0。
+		auto obs0 = make_obs(-0.2, 0.0, 0.0, 0.0, app::auto_aim::ArmorColor::Red,
+		                     app::auto_aim::ArmorName::Four, app::auto_aim::ArmorType::Small);
 
-		// 两次关联应始终把 (0.2,0,0,yaw=pi) 识别成 armor 2（几何 ID 固定），
-		// 与它在 vector 的位置无关。
-		auto result = app::auto_aim::associate(target, obs, assoc_config());
-		// 全局最优是 obs[1] armor2 或 obs[0] armor0（score 均为 0），
-		// 但每个观测对应固定 armor_id 由几何决定，而非 vector order。
-		runner.expect(result.has_value(), "association found");
+		// 单观测：几何位置 (0.2,0,0), yaw=-pi 必须匹配 armor_id 2。
+		auto obs2 = make_obs(0.2, 0.0, 0.0, -kPi, app::auto_aim::ArmorColor::Red,
+		                     app::auto_aim::ArmorName::Four, app::auto_aim::ArmorType::Small);
+
+		// 单测：隔离验证几何 -> armor_id 的映射是固定的。
+		{
+			auto r = app::auto_aim::associate(target, {obs0}, assoc_config());
+			runner.expect(r && r->observation_index == 0 && r->armor_id == 0,
+			              "isolated obs0 maps to armor_id 0");
+		}
+		{
+			auto r = app::auto_aim::associate(target, {obs2}, assoc_config());
+			runner.expect(r && r->observation_index == 0 && r->armor_id == 2,
+			              "isolated obs2 maps to armor_id 2");
+		}
+
+		// 重排验证：用 identity 不匹配的 distractor 占位，
+		// 验证 obs2 无论位于 index 0 还是 index 1，armor_id 恒为 2
+		// （避免浮点 tie 干扰）。
+		auto distractor = make_obs(0.2, 0.0, 0.0, -kPi, app::auto_aim::ArmorColor::Red,
+		                           app::auto_aim::ArmorName::Three,
+		                           app::auto_aim::ArmorType::Small);
+
+		{
+			auto r = app::auto_aim::associate(target, {obs2, distractor}, assoc_config());
+			runner.expect(r && r->observation_index == 0 && r->armor_id == 2,
+			              "obs2 at index 0 maps to armor_id 2");
+		}
+		{
+			auto r = app::auto_aim::associate(target, {distractor, obs2}, assoc_config());
+			runner.expect(r && r->observation_index == 1 && r->armor_id == 2,
+			              "obs2 at index 1 still maps to armor_id 2");
+		}
 
 		runner.end();
 	}

@@ -22,6 +22,7 @@
 #include "app/auto_aim/detector/detector_config.hpp"
 #include "app/auto_aim/detector/openvino_inference.hpp"
 #include "app/auto_aim/solver_config.hpp"
+#include "app/auto_aim/tracker_config.hpp"
 #include "tools/img_tools.hpp"
 
 #include <algorithm>
@@ -78,9 +79,16 @@ namespace
 
 		while(file >> timestamp >> w >> x >> y >> z)
 		{
+			// P2-2：normalize 前拒绝任何非 finite 分量。
+			if(!std::isfinite(timestamp) || !std::isfinite(w) || !std::isfinite(x)
+			   || !std::isfinite(y) || !std::isfinite(z))
+			{
+				return false;
+			}
+
 			const double norm2 = w * w + x * x + y * y + z * z;
 
-			if(!std::isfinite(timestamp) || norm2 <= 1e-12)
+			if(!std::isfinite(norm2) || norm2 <= 1e-12)
 			{
 				return false;
 			}
@@ -305,8 +313,13 @@ int main(int argc, char** argv)
 	app::auto_aim::Detector detector(detector_config, std::move(inference));
 	app::auto_aim::Solver solver(solver_config);
 
-	app::auto_aim::TrackerConfig tracker_config = app::auto_aim::make_default_tracker_config();
-	tracker_config.association.max_position_error_m = 1.0;
+	app::auto_aim::TrackerConfig tracker_config;
+	if(!app::auto_aim::load_tracker_config(
+	       project_root + "config/app/auto_aim/tracker.toml", tracker_config))
+	{
+		std::printf("[TRACKER_VISUAL] [ERROR] failed to load tracker config\n");
+		return 5;
+	}
 
 	app::auto_aim::Tracker tracker(tracker_config);
 	app::auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver), std::move(tracker));

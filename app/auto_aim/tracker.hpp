@@ -3,17 +3,15 @@
  * @brief Tracker 生命周期状态机（Commit 5）。
  *
  * 输入：vector<ArmorObservation> + timestamp（来自 caller）。
- * 输出：optional<TrackedTarget>。
+ * 输出：TrackResult（outcome + optional<TrackedTarget>）。
  *
- * 状态机：
+ * 状态机（detecting_confirm_hits == 1 时初始化帧直接进入 Tracking）：
  *   Lost ──valid observation──> Detecting ──enough hits──> Tracking
  *        <──too many misses─────┘                             │
  *                                                             │ miss
  *   Lost <──timeout──────────────────────────── TempLost <───┘
  *        └─reacquire────────────────────────────> Tracking
  *
- * 不依赖 Detector / Solver / cv::Mat / bbox / keypoints / OpenVINO。
- * 不读取 TOML；配置由 task/composition 层构造后注入。
  */
 
 #ifndef TGU_ROBOCORE_2027_AUTO_AIM_TRACKER_HPP
@@ -82,10 +80,17 @@ namespace app::auto_aim
 	};
 
 	/**
+	 * @brief 校验 TrackerConfig 全部字段。
+	 *
+	 * 供 Tracker 构造与 tracker_config loader 复用；校验失败抛 std::invalid_argument。
+	 */
+	void validate_tracker_config(const TrackerConfig& config);
+
+	/**
 	 * @brief 构造一个可用于离线/演示/测试 composition 的 TrackerConfig。
 	 *
-	 * 注意：这是 task/composition 层的 dev helper，不是 production TOML 装载；
-	 * 生产路径应显式从 config 解析 TrackerConfig。
+	 * 注意：这是 test/demo fixture，不是 production TOML 装载；
+	 * 生产路径应显式 load_tracker_config()。
 	 */
 	TrackerConfig make_default_tracker_config();
 
@@ -103,12 +108,12 @@ namespace app::auto_aim
 		 * @param observations 本帧所有已完成 Solver 的装甲板观测（可为空）。
 		 * @param timestamp_s 本帧时间戳（必须 finite，来自 caller，不读取系统时钟）。
 		 *
-		 * @return Lost 状态返回 nullopt；否则返回 TrackedTarget 快照。
+		 * @return TrackResult（outcome 与 target 生命周期分离）。
+		 *         outcome 始终反映本帧真实动作；Lost 时 target 为 nullopt。
 		 *
 		 * @throw std::invalid_argument timestamp 非 finite。
 		 */
-		std::optional<TrackedTarget> track(const std::vector<ArmorObservation>& observations,
-		                                   double timestamp_s);
+		TrackResult track(const std::vector<ArmorObservation>& observations, double timestamp_s);
 
 		/**
 		 * @brief 重置为 Lost / 清除 target。
@@ -117,7 +122,8 @@ namespace app::auto_aim
 
 	private:
 		/**
-		 * @brief 在 Lost 状态确定性选择一个 candidate 并初始化 Detecting。
+		 * @brief 在 Lost 状态确定性选择一个 candidate（后续初始化可能进入
+		 *        Detecting 或 Tracking，取决于 detecting_confirm_hits）。
 		 *
 		 * 排序：ArmorPriority（First 最优，Unknown 最后）→ world distance 小者
 		 * → source_detection_index 小者 → observation vector index 小者。
