@@ -5,10 +5,6 @@
 # 用途：仅供 task/test/test_auto_aim_pipeline 对 data/demo/demo.avi
 #       做离线闭环验证。
 #
-# 警告：这不是新机器人 (TGU Robocore) 的正式标定！
-#       正式 camera intrinsic / distortion / hand-eye calibration
-#       待后续标定后另行填写。
-#
 # 约定：
 # - 矩阵按行主序（row-major），9 个元素；
 # - 平移向量 [tx, ty, tz]，单位 m；

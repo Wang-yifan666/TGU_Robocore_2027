@@ -192,11 +192,33 @@ namespace app::auto_aim
 			return false;
 		}
 
-		// initial covariance diag (11) 与 measurement covariance diag (4)。
+		// initial covariance diag (11) 与 spherical measurement base covariance diag (4)。
 		if(!read_diagonal_covariance(root, "initial_covariance_diag", kTargetStateDim,
 		                             loaded.initial_covariance)
-		   || !read_diagonal_covariance(root, "measurement_covariance_diag", kTargetMeasurementDim,
-		                                loaded.measurement_covariance))
+		   || !read_diagonal_covariance(root, "measurement_base_covariance_diag",
+		                                kTargetMeasurementDim,
+		                                loaded.measurement_noise.base_covariance))
+		{
+			return false;
+		}
+
+		// adaptive R 增益。
+		auto gain = [&](std::string_view key, double& out) {
+			auto v = read_double(root, key);
+
+			if(!v || !std::isfinite(*v) || *v < 0.0)
+			{
+				LOG_ERROR(kLogModule, "{} must be finite and >= 0", key);
+				return false;
+			}
+
+			out = *v;
+			return true;
+		};
+
+		if(!gain("distance_angle_log_gain", loaded.measurement_noise.distance_angle_log_gain)
+		   || !gain("armor_yaw_distance_log_gain",
+		            loaded.measurement_noise.armor_yaw_distance_log_gain))
 		{
 			return false;
 		}

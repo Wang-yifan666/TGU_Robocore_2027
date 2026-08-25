@@ -77,7 +77,9 @@ namespace
 
 	const char* kValidToml = R"(
 initial_covariance_diag = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-measurement_covariance_diag = [1e-4, 1e-4, 1e-4, 1e-4]
+measurement_base_covariance_diag = [4e-3, 4e-3, 1.0, 9e-2]
+distance_angle_log_gain = 1.0
+armor_yaw_distance_log_gain = 0.005
 
 [lifecycle]
 detecting_confirm_hits = 10
@@ -111,7 +113,9 @@ default_4 = 0.2
 
 	const char* kMissingField = R"(
 initial_covariance_diag = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-measurement_covariance_diag = [1e-4, 1e-4, 1e-4, 1e-4]
+measurement_base_covariance_diag = [4e-3, 4e-3, 1.0, 9e-2]
+distance_angle_log_gain = 1.0
+armor_yaw_distance_log_gain = 0.005
 
 [lifecycle]
 detecting_confirm_hits = 10
@@ -146,7 +150,9 @@ default_4 = 0.2
 	// radius profile 超出 [min, max]。
 	const char* kInvalidRadiusProfile = R"(
 initial_covariance_diag = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-measurement_covariance_diag = [1e-4, 1e-4, 1e-4, 1e-4]
+measurement_base_covariance_diag = [4e-3, 4e-3, 1.0, 9e-2]
+distance_angle_log_gain = 1.0
+armor_yaw_distance_log_gain = 0.005
 
 [lifecycle]
 detecting_confirm_hits = 10
@@ -181,7 +187,9 @@ default_4 = 0.2
 	// negative variance。
 	const char* kInvalidNoise = R"(
 initial_covariance_diag = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-measurement_covariance_diag = [1e-4, 1e-4, 1e-4, 1e-4]
+measurement_base_covariance_diag = [4e-3, 4e-3, 1.0, 9e-2]
+distance_angle_log_gain = 1.0
+armor_yaw_distance_log_gain = 0.005
 
 [lifecycle]
 detecting_confirm_hits = 10
@@ -216,7 +224,7 @@ default_4 = 0.2
 	// measurement covariance diag 数量错误。
 	const char* kInvalidCovariance = R"(
 initial_covariance_diag = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-measurement_covariance_diag = [1e-4, 1e-4, 1e-4]
+measurement_base_covariance_diag = [1e-4, 1e-4, 1e-4]
 
 [lifecycle]
 detecting_confirm_hits = 10
@@ -251,7 +259,9 @@ default_4 = 0.2
 	// initial_covariance_diag 出现负值。
 	const char* kNegativeInitialCovarianceDiag = R"(
 initial_covariance_diag = [1.0, -1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-measurement_covariance_diag = [1e-4, 1e-4, 1e-4, 1e-4]
+measurement_base_covariance_diag = [4e-3, 4e-3, 1.0, 9e-2]
+distance_angle_log_gain = 1.0
+armor_yaw_distance_log_gain = 0.005
 
 [lifecycle]
 detecting_confirm_hits = 10
@@ -283,10 +293,10 @@ base_3 = 0.3205
 default_4 = 0.2
 )";
 
-	// measurement_covariance_diag 出现负值。
+	// measurement_base_covariance_diag 出现负值。
 	const char* kNegativeMeasurementCovarianceDiag = R"(
 initial_covariance_diag = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-measurement_covariance_diag = [1e-4, -1e-4, 1e-4, 1e-4]
+measurement_base_covariance_diag = [1e-4, -1e-4, 1e-4, 1e-4]
 
 [lifecycle]
 detecting_confirm_hits = 10
@@ -430,7 +440,7 @@ default_4 = 0.2
 		runner.expect(!load_from_string(kNegativeInitialCovarianceDiag, config),
 		              "negative initial_covariance_diag rejected");
 		runner.expect(!load_from_string(kNegativeMeasurementCovarianceDiag, config),
-		              "negative measurement_covariance_diag rejected");
+		              "negative measurement_base_covariance_diag rejected");
 
 		runner.end();
 	}
@@ -459,7 +469,7 @@ default_4 = 0.2
 			R(1, 1) = 1.0;
 			R(2, 2) = 1.0;
 			R(3, 3) = 1.0;
-			c.measurement_covariance = R;
+			c.measurement_noise.base_covariance = R;
 
 			bool rejected = false;
 			try
@@ -498,7 +508,7 @@ default_4 = 0.2
 			auto_aim::TrackerConfig c = base;
 			c.initial_covariance =
 			    Eigen::MatrixXd::Zero(auto_aim::kTargetStateDim, auto_aim::kTargetStateDim);
-			c.measurement_covariance =
+			c.measurement_noise.base_covariance =
 			    Eigen::MatrixXd::Zero(auto_aim::kTargetMeasurementDim, auto_aim::kTargetMeasurementDim);
 
 			bool accepted = true;
@@ -559,7 +569,7 @@ default_4 = 0.2
 			// 2x2 块 [[1, 1+1e-10],[1+1e-10, 1]] -> λ_min = -1e-10（对角仍 >= 0）
 			R(0, 1) = 1.0 + 1e-10;
 			R(1, 0) = 1.0 + 1e-10;
-			c.measurement_covariance = R;
+			c.measurement_noise.base_covariance = R;
 
 			bool rejected = false;
 			try
@@ -585,7 +595,7 @@ default_4 = 0.2
 			// 2x2 块 [[1, 1+1e-15],[1+1e-15, 1]] -> λ_min = -1e-15（roundoff 级别）
 			R(0, 1) = 1.0 + 1e-15;
 			R(1, 0) = 1.0 + 1e-15;
-			c.measurement_covariance = R;
+			c.measurement_noise.base_covariance = R;
 
 			bool accepted = true;
 			try
@@ -611,7 +621,7 @@ default_4 = 0.2
 			// 2x2 块 [[100, 200],[200, 100]] -> λ = {300, -100}
 			R(0, 1) = 200.0;
 			R(1, 0) = 200.0;
-			c.measurement_covariance = R;
+			c.measurement_noise.base_covariance = R;
 
 			bool rejected = false;
 			try

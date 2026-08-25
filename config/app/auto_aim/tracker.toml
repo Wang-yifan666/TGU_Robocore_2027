@@ -1,9 +1,3 @@
-# ============================================================
-# Tracker v1 production baseline config (migration defaults).
-#
-# 调参必须走 documented 流程，不硬编码进 C++。
-# ============================================================
-
 # ---- root-level scalar / array fields（必须先于任何 [table] 表头）----
 
 # 11 个对角元素（P0 先验协方差对角线，顺序：x vx y vy z vz yaw yaw_rate radius delta_radius delta_z）
@@ -14,8 +8,12 @@ initial_covariance_diag = [
     1.0, 1.0, 1.0
 ]
 
-# 4 个对角元素（R 测量协方差对角线：[x, y, z, yaw]）
-measurement_covariance_diag = [1e-4, 1e-4, 1e-4, 1e-4]
+# 4 个对角元素（R 测量 base 协方差对角线：[bearing_yaw rad, pitch rad, distance m, armor_yaw rad]）
+# 对应 R 对角线单位：[rad^2, rad^2, m^2, rad^2]
+measurement_base_covariance_diag = [4e-3, 4e-3, 1.0, 9e-2]
+# adaptive R 增益：R(2,2) += distance_angle_log_gain * log1p(|delta_angle|)；R(3,3) += armor_yaw_distance_log_gain * log1p(|distance|)
+distance_angle_log_gain = 1.0
+armor_yaw_distance_log_gain = 0.005
 
 [lifecycle]
 detecting_confirm_hits = 10   # >= 1

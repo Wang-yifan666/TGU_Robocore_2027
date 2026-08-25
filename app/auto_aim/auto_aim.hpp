@@ -5,11 +5,6 @@
  * 职责：
  *   Detector -> Solver(all) -> ArmorObservation[] -> Tracker -> TrackedTarget -> AimResult
  *
- * 不负责：
- * - 读取 TOML 配置；
- * - 构造 OpenVINOInference；
- * - 访问 camera / serial。
- *
  * 依赖装配（Detector / Solver / Tracker）由 task 层完成并注入。
  */
 

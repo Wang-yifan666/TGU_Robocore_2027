@@ -4,7 +4,6 @@
  *
  * 本类描述整辆敌方车辆的 rotation center，而非当前可见的装甲板位置。
  * 仅依赖 Eigen 与 Tracker 边界类型（ArmorObservation / ArmorHypothesis），
- * 不依赖 cv::Mat / bbox / keypoints / Detector / Solver / OpenVINO。
  *
  * 状态布局（11 维）：
  *   0  center_x
@@ -19,8 +18,9 @@
  *   9  delta_radius
  *   10 delta_z
  *
- * 测量模型（4 维）：
- *   z = [world_x, world_y, world_z, armor_yaw_in_world]
+ * 测量模型（4 维，spherical）：
+ *   z = [bearing_yaw, pitch, distance, armor_yaw_in_world]
+ *   单位 = [rad, rad, m, rad]
  */
 
 #ifndef TGU_ROBOCORE_2027_AUTO_AIM_TARGET_HPP
@@ -86,6 +86,28 @@ namespace app::auto_aim
 	};
 
 	/**
+	 * @brief Target 测量噪声配置（spherical adaptive measurement noise）。
+	 *
+	 * R 对角线单位（与 spherical 测量 [rad, rad, m, rad] 对应）：
+	 *   [rad^2, rad^2, m^2, rad^2]
+	 *
+	 * adaptive 项只作用于对角线：
+	 *   R(2,2) += distance_angle_log_gain * log1p(|delta_angle|)
+	 *   R(3,3) += armor_yaw_distance_log_gain * log1p(|distance|)
+	 */
+	struct MeasurementNoiseConfig
+	{
+		/// 4x4 spherical base R（允许全对称 PSD，保留 Phase 2 可配置性）。
+		Eigen::MatrixXd base_covariance;
+
+		/// R(2,2) 增益：对 distance variance（m^2）的缩放，log 项无量纲。
+		double distance_angle_log_gain = 1.0;
+
+		/// R(3,3) 增益：对 armor_yaw variance（rad^2）的缩放，log 项无量纲。
+		double armor_yaw_distance_log_gain = 1.0 / 200.0;
+	};
+
+	/**
 	 * @brief 由 identity 推导每辆车可见装甲板数量（deterministic 单测契约）。
 	 *
 	 * v1 规则：
@@ -148,32 +170,58 @@ namespace app::auto_aim
 		std::vector<ArmorHypothesis> armor_hypotheses() const;
 
 		/**
-		 * @brief 测量预测 h(x, armor_id) -> [x, y, z, yaw]（4 维）。
+		 * @brief 测量预测 h(x, armor_id) -> [bearing_yaw, pitch, distance, armor_yaw]（4 维）。
 		 *
-		 * 其中 armor_yaw 经 wrap_angle 归一化。
+		 * armor 位置 -> xyz2ypd -> [yaw, pitch, distance]；armor_yaw 用 limit_rad 归一化。
 		 */
 		Eigen::Vector4d measurement_model(const Eigen::VectorXd& x, int armor_id) const;
 
 		/**
-		 * @brief 解析 Jacobian dh/dx (4x11)。
+		 * @brief 解析 Jacobian H = dh/dx (4x11)，spherical 链式法则。
 		 */
 		Eigen::MatrixXd measurement_jacobian(const Eigen::VectorXd& x, int armor_id) const;
 
 		/**
+		 * @brief 从观测直接构造 spherical 测量向量 z（4 维）。
+		 *
+		 * 返回 [ypd[0], ypd[1], ypd[2], armor_yaw_in_world] = [rad, rad, m, rad]。
+		 *
+		 * @throw std::invalid_argument 观测分量非有限。
+		 */
+		static Eigen::Vector4d measurement_vector(const ArmorObservation& observation);
+
+		/**
+		 * @brief 测量残差 z - h：index 0/1/3（bearing_yaw / pitch / armor_yaw）用
+		 *        tools::maths_tools::limit_rad wrap，index 2（distance）不 wrap。
+		 *
+		 * @throw std::invalid_argument 输入维度非 4 或非有限。
+		 */
+		static Eigen::VectorXd measurement_residual(const Eigen::VectorXd& z,
+		                                            const Eigen::VectorXd& h);
+
+		/**
+		 * @brief adaptive R = base_covariance + 对角增益项。
+		 *
+		 * @throw std::invalid_argument base 非 4x4 / 观测分量非有限 / gain 非法。
+		 */
+		static Eigen::MatrixXd measurement_covariance(const ArmorObservation& observation,
+		                                              const MeasurementNoiseConfig& config);
+
+		/**
 		 * @brief 使用给定 armor_id 对观测做测量更新。
 		 *
-		 * 测量：[x, y, z, yaw]，使用 measurement_model / measurement_jacobian。
-		 * yaw residual 通过 EKF residual hook wrap。
+		 * 测量：spherical [bearing_yaw, pitch, distance, armor_yaw]；
+		 * z / h / H / residual / R 全部来自直接可测的 production helper。
 		 *
 		 * @param observation 完成三维解算的装甲板观测。
 		 * @param armor_id 匹配的装甲板编号。
-		 * @param measurement_covariance 4x4 测量协方差（由 config 明确提供）。
+		 * @param measurement_noise spherical 测量噪声配置。
 		 *
 		 * @return true 更新成功；false 数值失败（state/covariance 保持 prior）。
 		 * @throw std::invalid_argument 输入非法 / 协方差 shape 非法 / armor_id 越界。
 		 */
 		bool correct(const ArmorObservation& observation, int armor_id,
-		             const Eigen::MatrixXd& measurement_covariance);
+		             const MeasurementNoiseConfig& measurement_noise);
 
 		/**
 		 * @brief 最近一次 successful correction 的 prior innovation（4 维）。
@@ -218,6 +266,11 @@ namespace app::auto_aim
 		};
 
 		ArmorGeometry geometry(const Eigen::VectorXd& x, int armor_id) const;
+
+		/**
+		 * @brief 计算 armor_id 对应装甲板中心的 world 位置。
+		 */
+		Eigen::Vector3d armor_position(const Eigen::VectorXd& x, int armor_id) const;
 
 		std::optional<tools::ExtendedKalmanFilter> ekf_;
 		TargetModelConfig config_;

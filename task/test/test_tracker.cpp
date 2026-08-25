@@ -14,6 +14,8 @@
 
 #include <Eigen/Dense>
 
+#include "tools/maths_tools.hpp"
+
 namespace
 {
 
@@ -90,8 +92,10 @@ namespace
 		c.association.yaw_score_scale_rad = 1.0;
 
 		c.initial_covariance = Eigen::MatrixXd::Identity(kTargetStateDim, kTargetStateDim);
-		c.measurement_covariance =
-		    1e-4 * Eigen::MatrixXd::Identity(kTargetMeasurementDim, kTargetMeasurementDim);
+		c.measurement_noise.base_covariance = 1e-4 * Eigen::MatrixXd::Identity(
+		    kTargetMeasurementDim, kTargetMeasurementDim);
+		c.measurement_noise.distance_angle_log_gain = 0.0;
+		c.measurement_noise.armor_yaw_distance_log_gain = 0.0;
 
 		c.process_noise.translation_accel_variance = 1.0;
 		c.process_noise.yaw_accel_variance = 1.0;
@@ -116,6 +120,7 @@ namespace
 		o.priority = priority;
 		o.position_in_world = Eigen::Vector3d(-0.2, 0.0, 0.0);
 		o.armor_yaw_in_world = 0.0;
+		o.ypd_in_world = tools::maths_tools::xyz2ypd(o.position_in_world);
 		o.timestamp_s = timestamp;
 		o.source_detection_index = 0;
 		return o;
@@ -131,6 +136,7 @@ namespace
 		o.priority = priority;
 		o.position_in_world = Eigen::Vector3d(0.2, 0.0, 0.0);
 		o.armor_yaw_in_world = -kPi;
+		o.ypd_in_world = tools::maths_tools::xyz2ypd(o.position_in_world);
 		o.timestamp_s = timestamp;
 		o.source_detection_index = 0;
 		return o;
@@ -142,6 +148,7 @@ namespace
 	{
 		ArmorObservation o = obs_armor0(timestamp);
 		o.position_in_world = Eigen::Vector3d(-0.21, 0.0, 0.0);
+		o.ypd_in_world = tools::maths_tools::xyz2ypd(o.position_in_world);
 		return o;
 	}
 
@@ -393,8 +400,10 @@ namespace
 		config.detecting_max_misses = 2;
 		// singular R：成功 correction 后 P 在测量方向坍缩；dt=0 的 predict 不注入
 		// process noise（Q(0)=0），使下一次 correction 因 S 奇异而失败。
-		config.measurement_covariance =
+		config.measurement_noise.base_covariance =
 		    Eigen::MatrixXd::Zero(kTargetMeasurementDim, kTargetMeasurementDim);
+		config.measurement_noise.distance_angle_log_gain = 0.0;
+		config.measurement_noise.armor_yaw_distance_log_gain = 0.0;
 
 		Tracker tracker(config);
 
@@ -700,8 +709,10 @@ namespace
 		c.detecting_max_misses = 0;
 
 		c.initial_covariance = Eigen::MatrixXd::Zero(kTargetStateDim, kTargetStateDim);
-		c.measurement_covariance =
+		c.measurement_noise.base_covariance =
 		    Eigen::MatrixXd::Zero(kTargetMeasurementDim, kTargetMeasurementDim);
+		c.measurement_noise.distance_angle_log_gain = 0.0;
+		c.measurement_noise.armor_yaw_distance_log_gain = 0.0;
 
 		c.process_noise.translation_accel_variance = 0.0;
 		c.process_noise.yaw_accel_variance = 0.0;

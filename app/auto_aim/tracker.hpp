@@ -66,8 +66,8 @@ namespace app::auto_aim
 		/// 11x11 初始协方差（Target 构造用）。
 		Eigen::MatrixXd initial_covariance;
 
-		/// 4x4 测量协方差（correction 用）。
-		Eigen::MatrixXd measurement_covariance;
+		/// spherical 测量噪声配置（adaptive R）。
+		MeasurementNoiseConfig measurement_noise;
 
 		/// 过程噪声配置。
 		TargetModelConfig process_noise;

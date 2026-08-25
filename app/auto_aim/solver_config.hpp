@@ -5,7 +5,6 @@
  * 职责：
  * - 检查 matrix/vector 元素数量并校验数值 finite；
  * - 对缺失或非法字段返回失败，不静默 fallback 到虚假的相机内参；
- * - 不重复 SolverConfig 中已有的 armor 尺寸默认值。
  */
 
 #ifndef TGU_ROBOCORE_2027_APP_AUTO_AIM_SOLVER_CONFIG_HPP

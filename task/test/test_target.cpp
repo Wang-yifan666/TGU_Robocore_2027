@@ -17,10 +17,13 @@
 
 #include <Eigen/Dense>
 
+#include "tools/maths_tools.hpp"
+
 namespace
 {
 
 	constexpr double kPi = 3.14159265358979323846;
+	constexpr double kTwoPi = 2.0 * kPi;
 
 	class TestRunner
 	{
@@ -475,23 +478,25 @@ namespace
 	{
 		runner.begin("Measurement model exact");
 
-		app::auto_aim::Target t = make_target(0.0, 0.0, 0.0, 0.0, 0.2);
+		// 非边界状态：center (1,2,0.5), yaw=0.3, r=0.2，armor 0。
+		app::auto_aim::Target t = make_target(1.0, 2.0, 0.5, 0.3, 0.2);
 
-		Eigen::VectorXd x = t.state();
+		const Eigen::VectorXd x = t.state();
 
-		// armor 0：theta=0, r=0.2, z=0。
-		Eigen::Vector4d z0 = t.measurement_model(x, 0);
-		runner.expect(near(z0.x(), -0.2), "armor0 meas x");
-		runner.expect(near(z0.y(), 0.0), "armor0 meas y");
-		runner.expect(near(z0.z(), 0.0), "armor0 meas z");
-		runner.expect(near(z0.w(), 0.0), "armor0 meas yaw");
+		// armor 0：theta=0.3，position = center - r*(cos,sin)。
+		const double ax = 1.0 - 0.2 * std::cos(0.3);
+		const double ay = 2.0 - 0.2 * std::sin(0.3);
+		const double az = 0.5;
 
-		// armor 2：theta=pi。
-		Eigen::Vector4d z2 = t.measurement_model(x, 2);
-		runner.expect(near(z2.x(), 0.2), "armor2 meas x");
-		runner.expect(near(z2.y(), 0.0, 1e-9), "armor2 meas y");
-		runner.expect(z2.w() >= kPi - 1e-9 || z2.w() <= -kPi + 1e-9,
-		              "armor2 yaw == ±pi");
+		const double expected_yaw = std::atan2(ay, ax);
+		const double expected_pitch = std::atan2(az, std::sqrt(ax * ax + ay * ay));
+		const double expected_distance = std::sqrt(ax * ax + ay * ay + az * az);
+
+		const Eigen::Vector4d z0 = t.measurement_model(x, 0);
+		runner.expect(near(z0.x(), expected_yaw), "armor0 bearing_yaw");
+		runner.expect(near(z0.y(), expected_pitch), "armor0 pitch");
+		runner.expect(near(z0.z(), expected_distance), "armor0 distance");
+		runner.expect(near(z0.w(), 0.3), "armor0 armor_yaw");
 
 		runner.end();
 	}
@@ -500,28 +505,38 @@ namespace
 	{
 		runner.begin("Delta geometry exact");
 
-		app::auto_aim::Target t = make_target(0.0, 0.0, 0.0, 0.0, 0.2);
+		// 非边界状态 + alternate 几何。
+		app::auto_aim::Target t = make_target(0.0, 0.0, 0.0, 0.3, 0.2);
 
 		Eigen::VectorXd x = t.state();
 		x(app::auto_aim::kStateDeltaRadius) = 0.05;
 		x(app::auto_aim::kStateDeltaZ) = 0.1;
 
-		// armor 1 (alternate)：theta=pi/2, r = 0.2+0.05 = 0.25, z = 0.1。
-		Eigen::Vector4d z1 = t.measurement_model(x, 1);
-		runner.expect(near(z1.x(), 0.0, 1e-9), "armor1 x (theta=pi/2)");
-		runner.expect(near(z1.y(), -0.25, 1e-9), "armor1 y == -(r+dr)");
-		runner.expect(near(z1.z(), 0.1), "armor1 z == center_z + delta_z");
+		// armor 1 (alternate)：theta = 0.3 + pi/2，r = 0.25，z = 0.1。
+		{
+			const double theta = 0.3 + kPi / 2.0;
+			const double ax = -0.25 * std::cos(theta);
+			const double ay = -0.25 * std::sin(theta);
+			const double az = 0.1;
+			const Eigen::Vector4d z1 = t.measurement_model(x, 1);
+			runner.expect(near(z1.x(), std::atan2(ay, ax), 1e-9), "armor1 bearing_yaw");
+			runner.expect(near(z1.y(), std::atan2(az, std::sqrt(ax * ax + ay * ay)), 1e-9), "armor1 pitch");
+			runner.expect(near(z1.z(), std::sqrt(ax * ax + ay * ay + az * az), 1e-9), "armor1 distance (r+dr)");
+			runner.expect(near(z1.w(), theta, 1e-9), "armor1 armor_yaw");
+		}
 
-		// armor 3 (alternate)：theta=3pi/2, r=0.25, z=0.1。
-		Eigen::Vector4d z3 = t.measurement_model(x, 3);
-		runner.expect(near(z3.y(), 0.25, 1e-9), "armor3 y == +(r+dr)");
-		runner.expect(near(z3.z(), 0.1), "armor3 z == center_z + delta_z");
-
-		// armor 0 (non-alternate)：theta=0, position=(-0.2, 0)，不受 delta 影响。
-		Eigen::Vector4d z0 = t.measurement_model(x, 0);
-		runner.expect(near(z0.x(), -0.2, 1e-9), "armor0 x uses radius only");
-		runner.expect(near(z0.y(), 0.0, 1e-9), "armor0 y uses radius only");
-		runner.expect(near(z0.z(), 0.0), "armor0 z unaffected by delta_z");
+		// armor 0 (non-alternate)：theta = 0.3，r = 0.2，z = 0（不受 delta 影响）。
+		{
+			const double theta = 0.3;
+			const double ax = -0.2 * std::cos(theta);
+			const double ay = -0.2 * std::sin(theta);
+			const double az = 0.0;
+			const Eigen::Vector4d z0 = t.measurement_model(x, 0);
+			runner.expect(near(z0.x(), std::atan2(ay, ax), 1e-9), "armor0 bearing_yaw");
+			runner.expect(near(z0.y(), std::atan2(az, std::sqrt(ax * ax + ay * ay)), 1e-9), "armor0 pitch");
+			runner.expect(near(z0.z(), std::sqrt(ax * ax + ay * ay + az * az), 1e-9), "armor0 distance (r only)");
+			runner.expect(near(z0.w(), theta, 1e-9), "armor0 armor_yaw");
+		}
 
 		runner.end();
 	}
@@ -534,7 +549,7 @@ namespace
 	{
 		runner.begin("Jacobian vs finite difference");
 
-		app::auto_aim::Target t = make_target(0.0, 0.0, 0.0, 0.3, 0.2);
+		app::auto_aim::Target t = make_target(1.0, 2.0, 0.5, 0.3, 0.2);
 
 		Eigen::VectorXd x = t.state();
 		x(app::auto_aim::kStateVx) = 0.1;
@@ -565,12 +580,12 @@ namespace
 			const Eigen::Vector4d zm = t.measurement_model(xm, armor_id);
 
 			Eigen::Vector4d grad;
-			grad.x() = (zp.x() - zm.x()) / (2.0 * h);
-			grad.y() = (zp.y() - zm.y()) / (2.0 * h);
+			grad.x() = tools::maths_tools::limit_rad(zp.x() - zm.x()) / (2.0 * h);
+			grad.y() = tools::maths_tools::limit_rad(zp.y() - zm.y()) / (2.0 * h);
 			grad.z() = (zp.z() - zm.z()) / (2.0 * h);
-			grad.w() = app::auto_aim::wrap_angle(zp.w() - zm.w()) / (2.0 * h);
+			grad.w() = tools::maths_tools::limit_rad(zp.w() - zm.w()) / (2.0 * h);
 
-			Eigen::Vector4d analytic = H.col(j);
+			const Eigen::Vector4d analytic = H.col(j);
 
 			if((grad - analytic).norm() > tol)
 			{
@@ -582,6 +597,137 @@ namespace
 		runner.expect(all_close,
 		              std::string("all Jacobian columns match central difference")
 		                  + (bad.empty() ? "" : (" (bad: " + bad.front() + ")")));
+
+		runner.end();
+	}
+
+	void test_measurement_model_armor_counts(TestRunner& runner)
+	{
+		runner.begin("Measurement model armor counts");
+
+		// 3-armor (Outpost)。
+		{
+			auto o = make_observation(1.0, 1.0, 0.0, 0.3, app::auto_aim::ArmorColor::Red,
+			                          app::auto_aim::ArmorName::Outpost,
+			                          app::auto_aim::ArmorType::Big);
+			Eigen::MatrixXd P0 = Eigen::MatrixXd::Identity(app::auto_aim::kTargetStateDim,
+			                                              app::auto_aim::kTargetStateDim);
+			app::auto_aim::Target t(o, 0.2765, P0, deterministic_config());
+			runner.expect(t.armor_count() == 3, "outpost armor_count == 3");
+			for(int i = 0; i < t.armor_count(); ++i)
+			{
+				const Eigen::Vector4d z = t.measurement_model(t.state(), i);
+				runner.expect(z.allFinite(), "3-armor measurement finite");
+			}
+		}
+
+		// 2-armor (Big Three)。
+		{
+			auto o = make_observation(1.0, 1.0, 0.0, 0.3, app::auto_aim::ArmorColor::Blue,
+			                          app::auto_aim::ArmorName::Three,
+			                          app::auto_aim::ArmorType::Big);
+			Eigen::MatrixXd P0 = Eigen::MatrixXd::Identity(app::auto_aim::kTargetStateDim,
+			                                              app::auto_aim::kTargetStateDim);
+			app::auto_aim::Target t(o, 0.2, P0, deterministic_config());
+			runner.expect(t.armor_count() == 2, "big three armor_count == 2");
+			for(int i = 0; i < t.armor_count(); ++i)
+			{
+				const Eigen::Vector4d z = t.measurement_model(t.state(), i);
+				runner.expect(z.allFinite(), "2-armor measurement finite");
+			}
+		}
+
+		runner.end();
+	}
+
+	void test_measurement_model_armor_yaw_boundary(TestRunner& runner)
+	{
+		runner.begin("Measurement model armor_yaw ±pi boundary");
+
+		// 4-armor, yaw=0, armor 2 -> theta=pi -> limit_rad -> +pi。
+		app::auto_aim::Target t = make_target(0.0, 0.0, 0.0, 0.0, 0.2);
+		const Eigen::Vector4d z2 = t.measurement_model(t.state(), 2);
+		runner.expect(near(z2.w(), kPi, 1e-9), "armor2 armor_yaw == +pi (limit_rad)");
+
+		runner.end();
+	}
+
+	void test_measurement_residual_direct(TestRunner& runner)
+	{
+		runner.begin("Measurement residual direct (wrap)");
+
+		Eigen::VectorXd z(4);
+		Eigen::VectorXd h(4);
+
+		// index 0 (bearing_yaw)：±pi 边界 -> wrap 到 0。
+		z << kPi, 0.0, 5.0, 0.0;
+		h << -kPi, 0.0, 3.0, 0.0;
+		Eigen::VectorXd r = app::auto_aim::Target::measurement_residual(z, h);
+		runner.expect(near(r(0), 0.0, 1e-12), "bearing_yaw wraps across ±pi");
+		runner.expect(near(r(2), 2.0, 1e-12), "distance not wrapped (5-3=2)");
+
+		// index 1 (pitch)：大角度 wrap（raw 6.0 -> 6.0-2pi）。
+		z << 0.0, 3.0, 1.0, 0.0;
+		h << 0.0, -3.0, 1.0, 0.0;
+		r = app::auto_aim::Target::measurement_residual(z, h);
+		runner.expect(near(r(1), 6.0 - kTwoPi, 1e-9), "pitch wraps");
+
+		// index 3 (armor_yaw)：±pi 边界 -> 0。
+		z << 0.0, 0.0, 1.0, kPi;
+		h << 0.0, 0.0, 1.0, -kPi;
+		r = app::auto_aim::Target::measurement_residual(z, h);
+		runner.expect(near(r(3), 0.0, 1e-12), "armor_yaw wraps across ±pi");
+
+		// exact +pi/-pi convention。
+		runner.expect(near(tools::maths_tools::limit_rad(kPi), kPi, 1e-12), "limit_rad(+pi) == +pi");
+		runner.expect(near(tools::maths_tools::limit_rad(-kPi), kPi, 1e-12), "limit_rad(-pi) == +pi");
+
+		runner.end();
+	}
+
+	void test_measurement_covariance_direct(TestRunner& runner)
+	{
+		runner.begin("Measurement covariance direct (adaptive R)");
+
+		app::auto_aim::MeasurementNoiseConfig config;
+		config.base_covariance = Eigen::MatrixXd::Zero(4, 4);
+		config.base_covariance(0, 0) = 4e-3;
+		config.base_covariance(1, 1) = 4e-3;
+		config.base_covariance(2, 2) = 1.0;
+		config.base_covariance(3, 3) = 9e-2;
+		config.distance_angle_log_gain = 1.0;
+		config.armor_yaw_distance_log_gain = 1.0 / 200.0;
+
+		// 观测：position (1,1,0)，armor_yaw=0.5，distance=sqrt(2)。
+		app::auto_aim::ArmorObservation obs;
+		obs.position_in_world = Eigen::Vector3d(1.0, 1.0, 0.0);
+		obs.ypd_in_world = Eigen::Vector3d(kPi / 4.0, 0.0, std::sqrt(2.0));
+		obs.armor_yaw_in_world = 0.5;
+
+		const Eigen::MatrixXd R = app::auto_aim::Target::measurement_covariance(obs, config);
+
+		const double center_yaw = std::atan2(obs.position_in_world.y(), obs.position_in_world.x());
+		const double delta_angle = tools::maths_tools::limit_rad(obs.armor_yaw_in_world - center_yaw);
+		const double distance = obs.ypd_in_world.z();
+
+		const double expected_r22 = 1.0 + 1.0 * std::log1p(std::abs(delta_angle));
+		const double expected_r33 = 9e-2 + (1.0 / 200.0) * std::log1p(std::abs(distance));
+
+		runner.expect(near(R(0, 0), 4e-3), "R00 constant 4e-3");
+		runner.expect(near(R(1, 1), 4e-3), "R11 constant 4e-3");
+		runner.expect(near(R(2, 2), expected_r22, 1e-12), "R22 vs delta_angle");
+		runner.expect(near(R(3, 3), expected_r33, 1e-12), "R33 vs distance");
+		runner.expect(near(R(0, 1), 0.0) && near(R(1, 0), 0.0) && near(R(0, 2), 0.0)
+		                  && near(R(0, 3), 0.0) && near(R(1, 2), 0.0) && near(R(1, 3), 0.0)
+		                  && near(R(2, 3), 0.0) && near(R(3, 2), 0.0),
+		              "R is diagonal");
+
+		// gain=0 -> R == base。
+		config.distance_angle_log_gain = 0.0;
+		config.armor_yaw_distance_log_gain = 0.0;
+		const Eigen::MatrixXd R0 = app::auto_aim::Target::measurement_covariance(obs, config);
+		runner.expect(near(R0(2, 2), 1.0), "R22 == base when gain 0");
+		runner.expect(near(R0(3, 3), 9e-2), "R33 == base when gain 0");
 
 		runner.end();
 	}
@@ -706,6 +852,10 @@ int main()
 	test_measurement_model_exact(runner);
 	test_delta_geometry_exact(runner);
 	test_jacobian_finite_difference(runner);
+	test_measurement_model_armor_counts(runner);
+	test_measurement_model_armor_yaw_boundary(runner);
+	test_measurement_residual_direct(runner);
+	test_measurement_covariance_direct(runner);
 	test_helper_contracts(runner);
 	test_no_detector_solver_dependency(runner);
 

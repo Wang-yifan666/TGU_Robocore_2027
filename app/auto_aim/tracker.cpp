@@ -137,10 +137,23 @@ namespace app::auto_aim
 			    "initial_covariance must be 11x11 finite symmetric PSD");
 		}
 
-		if(!finite_square_symmetric_psd(config.measurement_covariance, kTargetMeasurementDim))
+		if(!finite_square_symmetric_psd(config.measurement_noise.base_covariance,
+		                                kTargetMeasurementDim))
 		{
 			throw std::invalid_argument(
-			    "measurement_covariance must be 4x4 finite symmetric PSD");
+			    "measurement_noise.base_covariance must be 4x4 finite symmetric PSD");
+		}
+
+		if(!std::isfinite(config.measurement_noise.distance_angle_log_gain)
+		   || config.measurement_noise.distance_angle_log_gain < 0.0)
+		{
+			throw std::invalid_argument("distance_angle_log_gain must be finite and >= 0");
+		}
+
+		if(!std::isfinite(config.measurement_noise.armor_yaw_distance_log_gain)
+		   || config.measurement_noise.armor_yaw_distance_log_gain < 0.0)
+		{
+			throw std::invalid_argument("armor_yaw_distance_log_gain must be finite and >= 0");
 		}
 
 		const TargetModelConfig& p = config.process_noise;
@@ -205,8 +218,14 @@ namespace app::auto_aim
 		c.association.yaw_score_scale_rad = 1.0;
 
 		c.initial_covariance = Eigen::MatrixXd::Identity(kTargetStateDim, kTargetStateDim);
-		c.measurement_covariance =
-		    1e-4 * Eigen::MatrixXd::Identity(kTargetMeasurementDim, kTargetMeasurementDim);
+		c.measurement_noise.base_covariance = Eigen::MatrixXd::Zero(
+		    kTargetMeasurementDim, kTargetMeasurementDim);
+		c.measurement_noise.base_covariance(0, 0) = 4e-3;  // bearing_yaw variance (rad^2)
+		c.measurement_noise.base_covariance(1, 1) = 4e-3;  // pitch variance (rad^2)
+		c.measurement_noise.base_covariance(2, 2) = 1.0;   // distance variance (m^2)
+		c.measurement_noise.base_covariance(3, 3) = 9e-2;  // armor_yaw variance (rad^2)
+		c.measurement_noise.distance_angle_log_gain = 1.0;
+		c.measurement_noise.armor_yaw_distance_log_gain = 1.0 / 200.0;
 
 		c.process_noise.translation_accel_variance = 1.0;
 		c.process_noise.yaw_accel_variance = 1.0;
@@ -446,7 +465,7 @@ namespace app::auto_aim
 		if(assoc)
 		{
 			const ArmorObservation& matched = observations[assoc->observation_index];
-			corrected = target_->correct(matched, assoc->armor_id, config_.measurement_covariance);
+			corrected = target_->correct(matched, assoc->armor_id, config_.measurement_noise);
 		}
 
 		// 先结算本帧 outcome（与 target 生命周期分离；Lost 也保留真实结果）。

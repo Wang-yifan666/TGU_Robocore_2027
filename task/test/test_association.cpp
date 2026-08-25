@@ -17,6 +17,8 @@
 
 #include <Eigen/Dense>
 
+#include "tools/maths_tools.hpp"
+
 namespace
 {
 
@@ -114,6 +116,7 @@ namespace
 		o.type = type;
 		o.position_in_world = Eigen::Vector3d(x, y, z);
 		o.armor_yaw_in_world = yaw;
+		o.ypd_in_world = tools::maths_tools::xyz2ypd(Eigen::Vector3d(x, y, z));
 		return o;
 	}
 
@@ -132,10 +135,14 @@ namespace
 		return app::auto_aim::Target(o, radius, P0, model_config());
 	}
 
-	Eigen::MatrixXd measurement_noise(double sigma2)
+	app::auto_aim::MeasurementNoiseConfig measurement_noise(double sigma2)
 	{
-		return sigma2 * Eigen::MatrixXd::Identity(app::auto_aim::kTargetMeasurementDim,
-		                                         app::auto_aim::kTargetMeasurementDim);
+		app::auto_aim::MeasurementNoiseConfig config;
+		config.base_covariance = sigma2 * Eigen::MatrixXd::Identity(
+		    app::auto_aim::kTargetMeasurementDim, app::auto_aim::kTargetMeasurementDim);
+		config.distance_angle_log_gain = 0.0;
+		config.armor_yaw_distance_log_gain = 0.0;
+		return config;
 	}
 
 	// ============================================================
@@ -395,8 +402,8 @@ namespace
 
 		runner.expect(ok, "correction returns true");
 		runner.expect(target.last_innovation().size() == 4, "innovation is 4D");
-		runner.expect(near(target.last_innovation()(0), 0.02, 1e-6),
-		              "innovation x ≈ +0.02");
+		runner.expect(near(target.last_innovation()(2), -0.02, 1e-6),
+		              "innovation distance ≈ -0.02");
 		runner.expect(std::isfinite(target.last_nis()), "NIS finite");
 		runner.expect(target.state().allFinite(), "state finite after correction");
 
@@ -427,8 +434,11 @@ namespace
 		                            app::auto_aim::ArmorName::Four,
 		                            app::auto_aim::ArmorType::Small);
 
-		const Eigen::MatrixXd r_zero = Eigen::MatrixXd::Zero(4, 4);
-		const bool ok = target.correct(observation, 0, r_zero);
+		app::auto_aim::MeasurementNoiseConfig zero_noise;
+		zero_noise.base_covariance = Eigen::MatrixXd::Zero(4, 4);
+		zero_noise.distance_angle_log_gain = 0.0;
+		zero_noise.armor_yaw_distance_log_gain = 0.0;
+		const bool ok = target.correct(observation, 0, zero_noise);
 
 		runner.expect(!ok, "correction returns false on singular S");
 		runner.expect((target.state() - prior_state).norm() <= 1e-12,

@@ -10,8 +10,6 @@
  * - 网络坐标映射回原图
  * - 生成 RawDetection
  *
- * 不负责：创建 Armor、判断敌方颜色、按 Armor 类型过滤、NMS、相机/串口/Tracker/Solver。
- *
  * 关键点顺序说明（保持与 sp_vision_25 YOLOV5 完全一致）：
  * 输出 tensor 每行字段为：
  *   col[0..1] = 关键点0 x/y
@@ -21,10 +19,6 @@
  *   col[8]     = objectness logit（需 sigmoid）
  *   col[9..12]  = 颜色 one-hot（4 类）
  *   col[13..21] = 编号 one-hot（9 类）
- *
- * 旧代码将原始字段重排为 Armor 所需的 [左上, 右上, 右下, 左下]：
- *   keypoints = { {col0,col1}, {col6,col7}, {col4,col5}, {col2,col3} }
- * （0-3 为左边；1-2 为右边；0-1 为上边；3-2 为下边）
  */
 #ifndef TGU_ROBOCORE_2027_APP_AUTO_AIM_DETECTOR_OPENVINO_INFERENCE_HPP
 #define TGU_ROBOCORE_2027_APP_AUTO_AIM_DETECTOR_OPENVINO_INFERENCE_HPP

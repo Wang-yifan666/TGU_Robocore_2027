@@ -8,6 +8,8 @@
 #include <cmath>
 #include <stdexcept>
 
+#include "tools/maths_tools.hpp"
+
 namespace app::auto_aim
 {
 
@@ -174,11 +176,10 @@ namespace app::auto_aim
 			return c;
 		};
 
-		// measurement residual：只有 yaw（index 3）wrap，position 不 wrap。
+		// measurement residual：index 0/1/3（bearing_yaw / pitch / armor_yaw）wrap，index 2 不 wrap。
+		// 直接复用 production helper，避免在构造器里复制公式。
 		auto residual = [](const Eigen::VectorXd& a, const Eigen::VectorXd& b) {
-			Eigen::VectorXd c = a - b;
-			c(3) = wrap_angle(c(3));
-			return c;
+			return Target::measurement_residual(a, b);
 		};
 
 		ekf_.emplace(x0, initial_covariance, state_add, residual);
@@ -229,6 +230,18 @@ namespace app::auto_aim
 		return hypotheses;
 	}
 
+	Eigen::Vector3d Target::armor_position(const Eigen::VectorXd& x, int armor_id) const
+	{
+		const ArmorGeometry g = geometry(x, armor_id);
+
+		Eigen::Vector3d position;
+		position.x() = x(kStateX) - g.radius * std::cos(g.theta);
+		position.y() = x(kStateY) - g.radius * std::sin(g.theta);
+		position.z() = g.use_alternate ? (x(kStateZ) + x(kStateDeltaZ)) : x(kStateZ);
+
+		return position;
+	}
+
 	Eigen::Vector4d Target::measurement_model(const Eigen::VectorXd& x, int armor_id) const
 	{
 		if(x.size() != kTargetStateDim || x.cols() != 1 || !x.allFinite())
@@ -242,27 +255,17 @@ namespace app::auto_aim
 		}
 
 		const ArmorGeometry g = geometry(x, armor_id);
+		const Eigen::Vector3d position = armor_position(x, armor_id);
+		const Eigen::Vector3d ypd = tools::maths_tools::xyz2ypd(position);
 
-		Eigen::Vector4d z;
-		z.x() = x(kStateX) - g.radius * std::cos(g.theta);
-		z.y() = x(kStateY) - g.radius * std::sin(g.theta);
-		z.z() = g.use_alternate ? (x(kStateZ) + x(kStateDeltaZ)) : x(kStateZ);
-		z.w() = g.theta;
-
-		return z;
+		return Eigen::Vector4d(ypd.x(), ypd.y(), ypd.z(), tools::maths_tools::limit_rad(g.theta));
 	}
 
-	bool Target::correct(const ArmorObservation& observation, int armor_id,
-	                     const Eigen::MatrixXd& measurement_covariance)
+	Eigen::Vector4d Target::measurement_vector(const ArmorObservation& observation)
 	{
-		if(armor_id < 0 || armor_id >= armor_count_)
+		if(!observation.ypd_in_world.allFinite())
 		{
-			throw std::invalid_argument("armor_id out of range");
-		}
-
-		if(!observation.position_in_world.allFinite())
-		{
-			throw std::invalid_argument("observation position_in_world must be finite");
+			throw std::invalid_argument("observation ypd_in_world must be finite");
 		}
 
 		if(!std::isfinite(observation.armor_yaw_in_world))
@@ -270,27 +273,104 @@ namespace app::auto_aim
 			throw std::invalid_argument("observation armor_yaw_in_world must be finite");
 		}
 
-		if(measurement_covariance.rows() != kTargetMeasurementDim
-		   || measurement_covariance.cols() != kTargetMeasurementDim)
+		return Eigen::Vector4d(observation.ypd_in_world.x(), observation.ypd_in_world.y(),
+		                       observation.ypd_in_world.z(), observation.armor_yaw_in_world);
+	}
+
+	Eigen::VectorXd Target::measurement_residual(const Eigen::VectorXd& z, const Eigen::VectorXd& h)
+	{
+		if(z.size() != kTargetMeasurementDim || z.cols() != 1 || !z.allFinite())
 		{
-			throw std::invalid_argument("measurement_covariance must be 4x4");
+			throw std::invalid_argument("z must be (4 x 1) and finite");
 		}
 
-		const Eigen::VectorXd& x_prior = ekf_->state();
+		if(h.size() != kTargetMeasurementDim || h.cols() != 1 || !h.allFinite())
+		{
+			throw std::invalid_argument("h must be (4 x 1) and finite");
+		}
 
+		Eigen::VectorXd c = z - h;
+		c(0) = tools::maths_tools::limit_rad(c(0));
+		c(1) = tools::maths_tools::limit_rad(c(1));
+		c(3) = tools::maths_tools::limit_rad(c(3));
+
+		return c;
+	}
+
+	Eigen::MatrixXd Target::measurement_covariance(const ArmorObservation& observation,
+	                                               const MeasurementNoiseConfig& config)
+	{
+		if(config.base_covariance.rows() != kTargetMeasurementDim
+		   || config.base_covariance.cols() != kTargetMeasurementDim)
+		{
+			throw std::invalid_argument("base_covariance must be 4x4");
+		}
+
+		if(!observation.position_in_world.allFinite())
+		{
+			throw std::invalid_argument("observation position_in_world must be finite");
+		}
+
+		if(!observation.ypd_in_world.allFinite())
+		{
+			throw std::invalid_argument("observation ypd_in_world must be finite");
+		}
+
+		if(!std::isfinite(observation.armor_yaw_in_world))
+		{
+			throw std::invalid_argument("observation armor_yaw_in_world must be finite");
+		}
+
+		if(!std::isfinite(config.distance_angle_log_gain) || config.distance_angle_log_gain < 0.0)
+		{
+			throw std::invalid_argument("distance_angle_log_gain must be finite and >= 0");
+		}
+
+		if(!std::isfinite(config.armor_yaw_distance_log_gain)
+		   || config.armor_yaw_distance_log_gain < 0.0)
+		{
+			throw std::invalid_argument("armor_yaw_distance_log_gain must be finite and >= 0");
+		}
+
+		Eigen::MatrixXd R = config.base_covariance;
+
+		// delta_angle 用 observation（armor_yaw vs 观测 bearing），不依赖 predicted state。
+		const double center_yaw =
+		    std::atan2(observation.position_in_world.y(), observation.position_in_world.x());
+		const double delta_angle =
+		    tools::maths_tools::limit_rad(observation.armor_yaw_in_world - center_yaw);
+
+		// distance 为 spherical distance（单位 m），log1p 内逐字保留米数值（legacy 语义）。
+		const double distance = observation.ypd_in_world.z();
+
+		// adaptive 项只作用于对角：R(2,2) 是 distance variance（m^2），R(3,3) 是 armor_yaw variance（rad^2）。
+		R(2, 2) += config.distance_angle_log_gain * std::log1p(std::abs(delta_angle));
+		R(3, 3) += config.armor_yaw_distance_log_gain * std::log1p(std::abs(distance));
+
+		return R;
+	}
+
+	bool Target::correct(const ArmorObservation& observation, int armor_id,
+	                     const MeasurementNoiseConfig& measurement_noise)
+	{
+		if(armor_id < 0 || armor_id >= armor_count_)
+		{
+			throw std::invalid_argument("armor_id out of range");
+		}
+
+		// z / h / H / R 全部来自直接可测的 production helper，不在 correct 内重复公式。
+		const Eigen::VectorXd z = measurement_vector(observation);
+
+		const Eigen::VectorXd& x_prior = ekf_->state();
 		const Eigen::MatrixXd H = measurement_jacobian(x_prior, armor_id);
 
 		auto h = [this, armor_id](const Eigen::VectorXd& x) {
 			return this->measurement_model(x, armor_id);
 		};
 
-		Eigen::VectorXd z(kTargetMeasurementDim);
-		z(0) = observation.position_in_world.x();
-		z(1) = observation.position_in_world.y();
-		z(2) = observation.position_in_world.z();
-		z(3) = observation.armor_yaw_in_world;
+		const Eigen::MatrixXd R = measurement_covariance(observation, measurement_noise);
 
-		return ekf_->update(z, H, measurement_covariance, h);
+		return ekf_->update(z, H, R, h);
 	}
 
 	const Eigen::VectorXd& Target::last_innovation() const noexcept
@@ -330,24 +410,34 @@ namespace app::auto_aim
 		const double dy_dl = g.use_alternate ? -sin_theta : 0.0;
 		const double dz_dh = g.use_alternate ? 1.0 : 0.0;
 
-		Eigen::MatrixXd H = Eigen::MatrixXd::Zero(kTargetMeasurementDim, kTargetStateDim);
+		// J_xyza_state：d[armor_x, armor_y, armor_z, armor_yaw] / d(state)（4x11）。
+		Eigen::MatrixXd J_xyza_state = Eigen::MatrixXd::Zero(kTargetMeasurementDim, kTargetStateDim);
 
-		H(0, kStateX) = 1.0;
-		H(0, kStateYaw) = dx_dyaw;
-		H(0, kStateRadius) = dx_dr;
-		H(0, kStateDeltaRadius) = dx_dl;
+		J_xyza_state(0, kStateX) = 1.0;
+		J_xyza_state(0, kStateYaw) = dx_dyaw;
+		J_xyza_state(0, kStateRadius) = dx_dr;
+		J_xyza_state(0, kStateDeltaRadius) = dx_dl;
 
-		H(1, kStateY) = 1.0;
-		H(1, kStateYaw) = dy_dyaw;
-		H(1, kStateRadius) = dy_dr;
-		H(1, kStateDeltaRadius) = dy_dl;
+		J_xyza_state(1, kStateY) = 1.0;
+		J_xyza_state(1, kStateYaw) = dy_dyaw;
+		J_xyza_state(1, kStateRadius) = dy_dr;
+		J_xyza_state(1, kStateDeltaRadius) = dy_dl;
 
-		H(2, kStateZ) = 1.0;
-		H(2, kStateDeltaZ) = dz_dh;
+		J_xyza_state(2, kStateZ) = 1.0;
+		J_xyza_state(2, kStateDeltaZ) = dz_dh;
 
-		H(3, kStateYaw) = 1.0;
+		J_xyza_state(3, kStateYaw) = 1.0;
 
-		return H;
+		// J_ypda_xyza：d[ypd, armor_yaw] / d[armor_x, armor_y, armor_z, armor_yaw]（4x4）。
+		const Eigen::Vector3d position = armor_position(x, armor_id);
+		const Eigen::MatrixXd J_ypd = tools::maths_tools::xyz2ypd_jacobian(position);
+
+		Eigen::MatrixXd J_ypda_xyza =
+		    Eigen::MatrixXd::Zero(kTargetMeasurementDim, kTargetMeasurementDim);
+		J_ypda_xyza.topLeftCorner(3, 3) = J_ypd;
+		J_ypda_xyza(3, 3) = 1.0;
+
+		return J_ypda_xyza * J_xyza_state;
 	}
 
 	const Eigen::VectorXd& Target::state() const noexcept

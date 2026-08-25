@@ -13,6 +13,7 @@ add_test(NAME test_target COMMAND test_target)
 add_test(NAME test_association COMMAND test_association)
 add_test(NAME test_tracker COMMAND test_tracker)
 add_test(NAME test_tracker_config COMMAND test_tracker_config)
+add_test(NAME test_tracker_spherical_equivalence COMMAND test_tracker_spherical_equivalence)
 
 add_executable(sentry sentry.cpp)
 add_executable(read_toml test/read_toml.cpp)
@@ -34,6 +35,7 @@ add_executable(test_target test/test_target.cpp)
 add_executable(test_association test/test_association.cpp)
 add_executable(test_tracker test/test_tracker.cpp)
 add_executable(test_tracker_config test/test_tracker_config.cpp)
+add_executable(test_tracker_spherical_equivalence test/test_tracker_spherical_equivalence.cpp)
 add_executable(test_tracker_replay test/test_tracker_replay.cpp)
 add_executable(test_tracker_visual test/test_tracker_visual.cpp)
 add_executable(test_all_pipeline test/test_all_pipeline.cpp)
@@ -178,6 +180,13 @@ target_link_libraries(test_tracker PRIVATE
 )
 
 target_link_libraries(test_tracker_config PRIVATE
+    app
+    tools
+    ${OpenCV_LIBS}
+    Eigen3::Eigen
+)
+
+target_link_libraries(test_tracker_spherical_equivalence PRIVATE
     app
     tools
     ${OpenCV_LIBS}

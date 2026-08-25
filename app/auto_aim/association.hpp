@@ -1,13 +1,6 @@
 /**
  * @file association.hpp
  * @brief Target 与 ArmorObservation 的确定性关联（Commit 4 / v1）。
- *
- * 仅依赖 ArmorObservation / ArmorHypothesis / Target 预测信息，
- * 不依赖 Detector / Solver / cv::Mat / bbox / keypoints。
- *
- * v1 关联使用：
- *   identity hard gate + position hard gate + yaw hard gate + normalized residual score。
- * 不实现 NIS gating（posterior 不污染拒绝决策）。
  */
 
 #ifndef TGU_ROBOCORE_2027_AUTO_AIM_ASSOCIATION_HPP
