@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numeric>
 #include <stdexcept>
 
@@ -31,6 +32,38 @@ namespace app::auto_aim
 
 			const double scale = std::max(1.0, m.norm());
 			return (m - m.transpose()).norm() <= kSymmetryTolerance * scale;
+		}
+
+		// 校验：正确 shape + finite + 近似对称 + positive-semidefinite（PSD）。
+		// 只要求 PSD（λ_min >= -tolerance），不要求 positive definite：
+		// singular covariance 是合法输入（例如测试用零协方差触发 correction 数值失败）。
+		bool finite_square_symmetric_psd(const Eigen::MatrixXd& m, Eigen::Index dim)
+		{
+			if(!finite_and_square_symmetric(m, dim))
+			{
+				return false;
+			}
+
+			// SelfAdjointEigenSolver 只读取下三角；先对称化以消除近似对称带来的微小不对称。
+			const Eigen::MatrixXd symmetric = 0.5 * (m + m.transpose());
+
+			Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(symmetric);
+
+			if(solver.info() != Eigen::Success)
+			{
+				return false;
+			}
+
+			const Eigen::VectorXd& eigenvalues = solver.eigenvalues();
+
+			// 数值 PSD：SelfAdjointEigenSolver 特征值误差上界约 O(eps * ||A||)，
+			// 取 64 * eps * dim * max_abs_eigenvalue 作为 scale-aware tolerance，
+			// 允许 roundoff 级别负特征值，同时拒绝真实负特征值。
+			const double max_abs_eigenvalue = eigenvalues.cwiseAbs().maxCoeff();
+			const double tolerance = 64.0 * std::numeric_limits<double>::epsilon()
+			                         * static_cast<double>(dim) * max_abs_eigenvalue;
+
+			return eigenvalues.minCoeff() >= -tolerance;
 		}
 
 		int priority_rank(ArmorPriority priority)
@@ -98,14 +131,16 @@ namespace app::auto_aim
 			throw std::invalid_argument("yaw_score_scale_rad must be finite and > 0");
 		}
 
-		if(!finite_and_square_symmetric(config.initial_covariance, kTargetStateDim))
+		if(!finite_square_symmetric_psd(config.initial_covariance, kTargetStateDim))
 		{
-			throw std::invalid_argument("initial_covariance must be 11x11 finite symmetric");
+			throw std::invalid_argument(
+			    "initial_covariance must be 11x11 finite symmetric PSD");
 		}
 
-		if(!finite_and_square_symmetric(config.measurement_covariance, kTargetMeasurementDim))
+		if(!finite_square_symmetric_psd(config.measurement_covariance, kTargetMeasurementDim))
 		{
-			throw std::invalid_argument("measurement_covariance must be 4x4 finite symmetric");
+			throw std::invalid_argument(
+			    "measurement_covariance must be 4x4 finite symmetric PSD");
 		}
 
 		const TargetModelConfig& p = config.process_noise;
@@ -449,6 +484,9 @@ namespace app::auto_aim
 			}
 			else
 			{
+				// miss（NoAssociation 或 CorrectionFailed）打断连续命中 streak：
+				// hit_count_ 必须清零，重新积累 consecutive successful corrections。
+				hit_count_ = 0;
 				++miss_count_;
 
 				if(miss_count_ > config_.detecting_max_misses)

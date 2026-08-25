@@ -306,6 +306,123 @@ namespace
 	}
 
 	// ============================================================
+	// Test：Detecting miss（NoAssociation）打断连续命中 streak（A）
+	// ============================================================
+	//
+	// 初始化帧计作第 1 个 hit。confirm_hits=3、detecting_max_misses=1。
+	// initial -> hit -> miss -> hit 不得进入 Tracking（miss 使 streak 清零）。
+
+	void test_detecting_miss_resets_hit_streak(TestRunner& runner)
+	{
+		runner.begin("Detecting miss (NoAssociation) resets hit streak");
+
+		Tracker tracker(default_config()); // confirm_hits=3, detecting_max_misses=1
+
+		// initial -> hit_count=1 (Detecting)
+		tracker.track({obs_armor0(0.0)}, 0.0);
+
+		// hit -> hit_count=2 (仍 Detecting)
+		auto r_hit = tracker.track({obs_armor0(0.1)}, 0.1);
+		runner.expect(r_hit.target && r_hit.target->state == TrackerState::Detecting,
+		              "after hit streak=2 still Detecting");
+
+		// miss -> hit_count=0, miss_count=1（仍 Detecting）
+		auto r_miss = tracker.track({}, 0.2);
+		runner.expect(r_miss.outcome == TrackUpdateOutcome::NoAssociation,
+		              "miss outcome == NoAssociation");
+		runner.expect(r_miss.target && r_miss.target->state == TrackerState::Detecting,
+		              "first miss still Detecting");
+
+		// hit -> 从 0 重新积累，hit_count=1，不得进入 Tracking
+		auto r_final = tracker.track({obs_armor0(0.3)}, 0.3);
+		runner.expect(r_final.target && r_final.target->state == TrackerState::Detecting,
+		              "hit after miss restarts streak (NOT Tracking)");
+
+		runner.end();
+	}
+
+	// ============================================================
+	// Test：Detecting 必须在 miss 后重新取得完整 consecutive streak（B）
+	// ============================================================
+
+	void test_detecting_consecutive_streak_required(TestRunner& runner)
+	{
+		runner.begin("Detecting requires full consecutive streak after a miss");
+
+		Tracker tracker(default_config()); // confirm_hits=3
+
+		// initial -> hit=1
+		tracker.track({obs_armor0(0.0)}, 0.0);
+		// hit -> hit=2
+		tracker.track({obs_armor0(0.1)}, 0.1);
+		// miss -> hit=0, miss=1
+		tracker.track({}, 0.2);
+		// hit -> hit=1
+		tracker.track({obs_armor0(0.3)}, 0.3);
+		// hit -> hit=2（仍 Detecting）
+		auto r2 = tracker.track({obs_armor0(0.4)}, 0.4);
+		runner.expect(r2.target && r2.target->state == TrackerState::Detecting,
+		              "after miss, 2 consecutive hits still Detecting");
+		// hit -> hit=3 -> Tracking
+		auto r3 = tracker.track({obs_armor0(0.5)}, 0.5);
+		runner.expect(r3.target && r3.target->state == TrackerState::Tracking,
+		              "3 consecutive hits after miss -> Tracking");
+
+		runner.end();
+	}
+
+	// ============================================================
+	// Test：Detecting correction 失败（CorrectionFailed）打断 streak（D）
+	// ============================================================
+	//
+	// 区分性回归：必须能在旧 cumulative-streak 实现上失败。
+	// 构造：
+	//   dt>0 successful correction（推进 hit streak + P 在测量方向坍缩）
+	//   dt=0 帧：predict 不注入 process noise（Q(0)=0），P 保持奇异，
+	//            非零 innovation 使 S=H P H^T 奇异 -> CorrectionFailed
+	//   dt>0 帧：process noise 恢复 P 满秩 -> 再次 successful correction
+	// consecutive 语义下 hit 从 0 重新积累（不进入 Tracking）；
+	// cumulative 语义下 hit 累计到 3 -> Tracking（本测试在旧实现上失败）。
+
+	void test_detecting_correction_failed_resets_hit_streak(TestRunner& runner)
+	{
+		runner.begin("Detecting CorrectionFailed resets hit streak (consecutive)");
+
+		TrackerConfig config = default_config();
+		config.detecting_confirm_hits = 3;
+		config.detecting_max_misses = 2;
+		// singular R：成功 correction 后 P 在测量方向坍缩；dt=0 的 predict 不注入
+		// process noise（Q(0)=0），使下一次 correction 因 S 奇异而失败。
+		config.measurement_covariance =
+		    Eigen::MatrixXd::Zero(kTargetMeasurementDim, kTargetMeasurementDim);
+
+		Tracker tracker(config);
+
+		// frame 1（init）：hit=1，Detecting。
+		auto r0 = tracker.track({obs_armor0(0.0)}, 0.0);
+		runner.expect(r0.target && r0.target->state == TrackerState::Detecting,
+		              "init -> Detecting");
+
+		// frame 2（dt>0）：successful correction -> hit=2。
+		auto r1 = tracker.track({obs_armor0(0.1)}, 0.1);
+		runner.expect(r1.outcome == TrackUpdateOutcome::Corrected, "frame2 corrected");
+
+		// frame 3（dt=0）：predict 不注入 Q，S 奇异 + 非零 innovation -> CorrectionFailed。
+		// 打断 hit streak（hit_count_=0）。
+		auto r2 = tracker.track({obs_armor0_perturbed(0.1)}, 0.1);
+		runner.expect(r2.outcome == TrackUpdateOutcome::CorrectionFailed,
+		              "frame3 CorrectionFailed (dt=0 singular S)");
+
+		// frame 4（dt>0）：process noise 恢复 P 满秩 -> 再次 successful correction。
+		auto r3 = tracker.track({obs_armor0(0.2)}, 0.2);
+		runner.expect(r3.outcome == TrackUpdateOutcome::Corrected, "frame4 corrected");
+		runner.expect(r3.target && r3.target->state == TrackerState::Detecting,
+		              "CorrectionFailed reset streak (frame4 still Detecting)");
+
+		runner.end();
+	}
+
+	// ============================================================
 	// Test：reset -> Lost
 	// ============================================================
 
@@ -713,6 +830,9 @@ int main()
 	test_temp_lost_predict_reacquire_lost(runner);
 	test_temp_lost_timeout(runner);
 	test_detecting_miss_policy(runner);
+	test_detecting_miss_resets_hit_streak(runner);
+	test_detecting_consecutive_streak_required(runner);
+	test_detecting_correction_failed_resets_hit_streak(runner);
 	test_reset(runner);
 	test_dt_zero(runner);
 	test_dt_negative(runner);

@@ -248,6 +248,76 @@ base_3 = 0.3205
 default_4 = 0.2
 )";
 
+	// initial_covariance_diag 出现负值。
+	const char* kNegativeInitialCovarianceDiag = R"(
+initial_covariance_diag = [1.0, -1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+measurement_covariance_diag = [1e-4, 1e-4, 1e-4, 1e-4]
+
+[lifecycle]
+detecting_confirm_hits = 10
+detecting_max_misses = 5
+temp_lost_max_misses = 20
+max_dt_s = 0.5
+
+[association]
+max_position_error_m = 0.5
+max_yaw_error_rad = 0.5
+position_score_scale_m = 1.0
+yaw_score_scale_rad = 1.0
+
+[process_noise]
+translation_accel_variance = 1.0
+yaw_accel_variance = 1.0
+radius_random_walk_variance = 1.0
+delta_radius_random_walk_variance = 1.0
+delta_z_random_walk_variance = 1.0
+
+[radius]
+min_radius_m = 0.05
+max_radius_m = 0.5
+
+[radius_profile]
+balance_2 = 0.2
+outpost_3 = 0.2765
+base_3 = 0.3205
+default_4 = 0.2
+)";
+
+	// measurement_covariance_diag 出现负值。
+	const char* kNegativeMeasurementCovarianceDiag = R"(
+initial_covariance_diag = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+measurement_covariance_diag = [1e-4, -1e-4, 1e-4, 1e-4]
+
+[lifecycle]
+detecting_confirm_hits = 10
+detecting_max_misses = 5
+temp_lost_max_misses = 20
+max_dt_s = 0.5
+
+[association]
+max_position_error_m = 0.5
+max_yaw_error_rad = 0.5
+position_score_scale_m = 1.0
+yaw_score_scale_rad = 1.0
+
+[process_noise]
+translation_accel_variance = 1.0
+yaw_accel_variance = 1.0
+radius_random_walk_variance = 1.0
+delta_radius_random_walk_variance = 1.0
+delta_z_random_walk_variance = 1.0
+
+[radius]
+min_radius_m = 0.05
+max_radius_m = 0.5
+
+[radius_profile]
+balance_2 = 0.2
+outpost_3 = 0.2765
+base_3 = 0.3205
+default_4 = 0.2
+)";
+
 	bool load_from_string(const std::string_view toml_text, auto_aim::TrackerConfig& config)
 	{
 		const toml::table root = toml::parse(toml_text);
@@ -352,6 +422,212 @@ default_4 = 0.2
 		runner.end();
 	}
 
+	void test_negative_covariance_diag(TestRunner& runner)
+	{
+		runner.begin("Negative covariance diagonal (TOML)");
+
+		auto_aim::TrackerConfig config;
+		runner.expect(!load_from_string(kNegativeInitialCovarianceDiag, config),
+		              "negative initial_covariance_diag rejected");
+		runner.expect(!load_from_string(kNegativeMeasurementCovarianceDiag, config),
+		              "negative measurement_covariance_diag rejected");
+
+		runner.end();
+	}
+
+	void test_covariance_psd_validation(TestRunner& runner)
+	{
+		runner.begin("Covariance PSD validation (programmatic)");
+
+		// 合法 baseline。
+		auto_aim::TrackerConfig base;
+		if(!load_from_string(kValidToml, base))
+		{
+			runner.expect(false, "baseline config should load");
+			runner.end();
+			return;
+		}
+
+		// 1) symmetric-indefinite：对角 >=0、对称，但存在负特征值 -> 拒绝。
+		{
+			auto_aim::TrackerConfig c = base;
+			Eigen::MatrixXd R =
+			    Eigen::MatrixXd::Zero(auto_aim::kTargetMeasurementDim, auto_aim::kTargetMeasurementDim);
+			R(0, 0) = 1.0;
+			R(0, 1) = 2.0;
+			R(1, 0) = 2.0;
+			R(1, 1) = 1.0;
+			R(2, 2) = 1.0;
+			R(3, 3) = 1.0;
+			c.measurement_covariance = R;
+
+			bool rejected = false;
+			try
+			{
+				auto_aim::validate_tracker_config(c);
+			}
+			catch(const std::invalid_argument&)
+			{
+				rejected = true;
+			}
+			runner.expect(rejected, "symmetric-indefinite measurement_covariance rejected");
+		}
+
+		// 2) programmatic 负对角 initial covariance -> 拒绝。
+		{
+			auto_aim::TrackerConfig c = base;
+			Eigen::MatrixXd P =
+			    Eigen::MatrixXd::Identity(auto_aim::kTargetStateDim, auto_aim::kTargetStateDim);
+			P(0, 0) = -1.0;
+			c.initial_covariance = P;
+
+			bool rejected = false;
+			try
+			{
+				auto_aim::validate_tracker_config(c);
+			}
+			catch(const std::invalid_argument&)
+			{
+				rejected = true;
+			}
+			runner.expect(rejected, "negative diagonal initial_covariance rejected");
+		}
+
+		// 3) zero covariance -> 接受。
+		{
+			auto_aim::TrackerConfig c = base;
+			c.initial_covariance =
+			    Eigen::MatrixXd::Zero(auto_aim::kTargetStateDim, auto_aim::kTargetStateDim);
+			c.measurement_covariance =
+			    Eigen::MatrixXd::Zero(auto_aim::kTargetMeasurementDim, auto_aim::kTargetMeasurementDim);
+
+			bool accepted = true;
+			try
+			{
+				auto_aim::validate_tracker_config(c);
+			}
+			catch(...)
+			{
+				accepted = false;
+			}
+			runner.expect(accepted, "zero covariance accepted");
+		}
+
+		// 4) singular PSD covariance -> 接受。
+		{
+			auto_aim::TrackerConfig c = base;
+			Eigen::MatrixXd P =
+			    Eigen::MatrixXd::Zero(auto_aim::kTargetStateDim, auto_aim::kTargetStateDim);
+			P(0, 0) = 1.0; // 仅一个非零对角 -> singular PSD
+			c.initial_covariance = P;
+
+			bool accepted = true;
+			try
+			{
+				auto_aim::validate_tracker_config(c);
+			}
+			catch(...)
+			{
+				accepted = false;
+			}
+			runner.expect(accepted, "singular PSD initial_covariance accepted");
+		}
+
+		// 5) normal PSD covariance -> 接受。
+		{
+			bool accepted = true;
+			try
+			{
+				auto_aim::validate_tracker_config(base);
+			}
+			catch(...)
+			{
+				accepted = false;
+			}
+			runner.expect(accepted, "normal PSD covariance accepted");
+		}
+
+		// 6) small-but-real negative eigenvalue -> 拒绝。
+		{
+			auto_aim::TrackerConfig c = base;
+			Eigen::MatrixXd R =
+			    Eigen::MatrixXd::Zero(auto_aim::kTargetMeasurementDim, auto_aim::kTargetMeasurementDim);
+			R(0, 0) = 1.0;
+			R(1, 1) = 1.0;
+			R(2, 2) = 1.0;
+			R(3, 3) = 1.0;
+			// 2x2 块 [[1, 1+1e-10],[1+1e-10, 1]] -> λ_min = -1e-10（对角仍 >= 0）
+			R(0, 1) = 1.0 + 1e-10;
+			R(1, 0) = 1.0 + 1e-10;
+			c.measurement_covariance = R;
+
+			bool rejected = false;
+			try
+			{
+				auto_aim::validate_tracker_config(c);
+			}
+			catch(const std::invalid_argument&)
+			{
+				rejected = true;
+			}
+			runner.expect(rejected, "small-but-real negative eigenvalue rejected");
+		}
+
+		// 7) roundoff 级别负特征值 -> 接受。
+		{
+			auto_aim::TrackerConfig c = base;
+			Eigen::MatrixXd R =
+			    Eigen::MatrixXd::Zero(auto_aim::kTargetMeasurementDim, auto_aim::kTargetMeasurementDim);
+			R(0, 0) = 1.0;
+			R(1, 1) = 1.0;
+			R(2, 2) = 1.0;
+			R(3, 3) = 1.0;
+			// 2x2 块 [[1, 1+1e-15],[1+1e-15, 1]] -> λ_min = -1e-15（roundoff 级别）
+			R(0, 1) = 1.0 + 1e-15;
+			R(1, 0) = 1.0 + 1e-15;
+			c.measurement_covariance = R;
+
+			bool accepted = true;
+			try
+			{
+				auto_aim::validate_tracker_config(c);
+			}
+			catch(...)
+			{
+				accepted = false;
+			}
+			runner.expect(accepted, "roundoff-level negative eigenvalue accepted");
+		}
+
+		// 8) large-scale indefinite -> 拒绝。
+		{
+			auto_aim::TrackerConfig c = base;
+			Eigen::MatrixXd R =
+			    Eigen::MatrixXd::Zero(auto_aim::kTargetMeasurementDim, auto_aim::kTargetMeasurementDim);
+			R(0, 0) = 100.0;
+			R(1, 1) = 100.0;
+			R(2, 2) = 1.0;
+			R(3, 3) = 1.0;
+			// 2x2 块 [[100, 200],[200, 100]] -> λ = {300, -100}
+			R(0, 1) = 200.0;
+			R(1, 0) = 200.0;
+			c.measurement_covariance = R;
+
+			bool rejected = false;
+			try
+			{
+				auto_aim::validate_tracker_config(c);
+			}
+			catch(const std::invalid_argument&)
+			{
+				rejected = true;
+			}
+			runner.expect(rejected, "large-scale indefinite covariance rejected");
+		}
+
+		runner.end();
+	}
+
 } // namespace
 
 int main()
@@ -364,6 +640,8 @@ int main()
 	test_missing_or_invalid_field(runner);
 	test_invalid_radius_profile(runner);
 	test_invalid_covariance_noise(runner);
+	test_negative_covariance_diag(runner);
+	test_covariance_psd_validation(runner);
 	test_failed_load_no_partial_output(runner);
 
 	runner.print_summary();

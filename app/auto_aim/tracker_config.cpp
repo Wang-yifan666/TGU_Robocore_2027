@@ -96,9 +96,12 @@ namespace app::auto_aim
 
 			if(static_cast<int>(values->size()) != dim
 			   || !std::all_of(values->begin(), values->end(),
-			                   [](double v) { return std::isfinite(v); }))
+			                   [](double v) { return std::isfinite(v) && v >= 0.0; }))
 			{
-				LOG_ERROR(kLogModule, "{} must contain exactly {} finite values", key, dim);
+				LOG_ERROR(kLogModule,
+				          "{} covariance diagonal must contain exactly {} finite non-negative "
+				          "values",
+				          key, dim);
 				return false;
 			}
 
@@ -264,6 +267,18 @@ namespace app::auto_aim
 		   || !rp("base_3", loaded.radius_profile.base_3)
 		   || !rp("default_4", loaded.radius_profile.default_4))
 		{
+			return false;
+		}
+
+		// 构造完整 TrackerConfig 后统一走 validate_tracker_config，避免 loader 与
+		// validate 两套规则独立漂移。validation 失败时保持原 config 不变并给出日志。
+		try
+		{
+			validate_tracker_config(loaded);
+		}
+		catch(const std::exception& exception)
+		{
+			LOG_ERROR(kLogModule, "tracker configuration validation failed: {}", exception.what());
 			return false;
 		}
 
