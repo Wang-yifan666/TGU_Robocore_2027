@@ -49,6 +49,7 @@ add_executable(test_vehicle_prediction test/test_vehicle_prediction.cpp)
 add_executable(test_aimer_config test/test_aimer_config.cpp)
 add_executable(test_aimer test/test_aimer.cpp)
 add_executable(test_aimer_pipeline test/test_aimer_pipeline.cpp)
+add_executable(test_aimer_visual test/test_aimer_visual.cpp)
 
 target_compile_definitions(test_logger PRIVATE
     PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
@@ -93,6 +94,17 @@ target_link_libraries(test_aimer PRIVATE
 )
 
 target_link_libraries(test_aimer_pipeline PRIVATE
+    app
+    tools
+    ${OpenCV_LIBS}
+    Eigen3::Eigen
+)
+
+target_compile_definitions(test_aimer_visual PRIVATE
+    PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+)
+
+target_link_libraries(test_aimer_visual PRIVATE
     app
     tools
     ${OpenCV_LIBS}

@@ -39,11 +39,13 @@ namespace app::auto_aim
 	/**
 	 * @brief 选板策略。
 	 *
-	 * 本阶段只实现 SpCompat；predictive_hysteresis 留作未来扩展。
+	 * SpCompat 复现 SP25 兼容选板（含 armor lock 迟滞）；
+	 * PredictiveHysteresis 使用提前观察 + 迟滞的离散切板。
 	 */
 	enum class ArmorSwitchStrategy : std::uint8_t
 	{
-		SpCompat = 0
+		SpCompat = 0,
+		PredictiveHysteresis
 	};
 
 	/**
@@ -87,6 +89,12 @@ namespace app::auto_aim
 		double flight_time_convergence_s = 0.0;
 
 		ArmorSwitchStrategy armor_switch_strategy = ArmorSwitchStrategy::SpCompat;
+
+		/// PredictiveHysteresis 迟滞角（rad）。新板需比旧板至少优这么多才切换。
+		double predictive_switch_hysteresis_rad = 0.0;
+
+		/// PredictiveHysteresis 最大提前切板时间（s）。
+		double predictive_switch_max_advance_s = 0.0;
 	};
 
 	/**
@@ -137,13 +145,31 @@ namespace app::auto_aim
 	struct AimerDebugData
 	{
 		double t_muzzle_s = 0.0;
-		double t_hit_s = 0.0;
+
+		/// 最终 aim_point 对应的目标预测绝对时刻（= t_muzzle + 最终 prev_fly_time）。
+		double target_prediction_time_s = 0.0;
+
+		/// 弹丸到达时刻（= t_muzzle + 最终 current_traj.fly_time）。
+		double ballistic_arrival_time_s = 0.0;
+
+		/// 选板时刻（= target_prediction_time_s + switch_advance_s）。
+		double armor_selection_time_s = 0.0;
+
+		/// 提前切板时间（SpCompat 恒 0）。
+		double switch_advance_s = 0.0;
+
 		double flight_time_s = 0.0;
 
 		Eigen::Vector3d aim_point_in_world = Eigen::Vector3d::Zero();
 
 		int refinement_iterations = 0;
 		bool ballistic_converged = false;
+
+		/// 本帧调用前已提交的 predictive 状态（验证 transaction 用）。
+		std::optional<int> previous_predictive_armor_id;
+
+		/// 本帧最终 pending（提交后）的 predictive 状态。
+		std::optional<int> pending_predictive_armor_id;
 	};
 
 	/**
@@ -174,6 +200,7 @@ namespace app::auto_aim
 		AimerConfig config_;
 
 		std::optional<int> lock_id_;
+		std::optional<int> predictive_selected_armor_id_;
 		std::optional<std::uint64_t> active_target_token_;
 	};
 

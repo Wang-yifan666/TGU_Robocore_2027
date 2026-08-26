@@ -22,6 +22,7 @@ namespace app::auto_aim
 	{
 
 		constexpr std::string_view kLogModule = "AIMER_CONFIG";
+		constexpr double kPi = 3.14159265358979323846;
 
 		std::optional<double> read_double(const toml::table& table, std::string_view key)
 		{
@@ -77,6 +78,10 @@ namespace app::auto_aim
 		c.flight_time_convergence_s = 0.001;
 
 		c.armor_switch_strategy = ArmorSwitchStrategy::SpCompat;
+
+		// PredictiveHysteresis baseline（来自 WMJAimer 公开配置/实现，仅作迁移 baseline）。
+		c.predictive_switch_hysteresis_rad = 0.2617993877991494; // 15°（标准 rad）
+		c.predictive_switch_max_advance_s = 0.2;
 
 		return c;
 	}
@@ -134,6 +139,56 @@ namespace app::auto_aim
 		{
 			throw std::invalid_argument("flight_time_convergence_s must be finite and > 0");
 		}
+
+		// 关系校验：coming 必须 >= leaving。
+		if(config.coming_angle_rad < config.leaving_angle_rad)
+		{
+			throw std::invalid_argument("coming_angle_rad must be >= leaving_angle_rad");
+		}
+
+		if(config.outpost_coming_angle_rad < config.outpost_leaving_angle_rad)
+		{
+			throw std::invalid_argument("outpost_coming_angle_rad must be >= outpost_leaving_angle_rad");
+		}
+
+		// shootable 范围上限 pi。
+		if(config.shootable_angle_threshold_rad > kPi)
+		{
+			throw std::invalid_argument("shootable_angle_threshold_rad must be <= pi");
+		}
+
+		// fallback 策略下 fallback 弹速必须 >= min_valid。
+		if(config.invalid_bullet_speed_policy == InvalidBulletSpeedPolicy::Fallback
+		   && config.fallback_bullet_speed_mps < config.min_valid_bullet_speed_mps)
+		{
+			throw std::invalid_argument(
+			    "fallback_bullet_speed_mps must be >= min_valid_bullet_speed_mps (fallback policy)");
+		}
+
+		// enum 程序化非法值校验（不只依赖 TOML loader）。
+		if(config.invalid_bullet_speed_policy != InvalidBulletSpeedPolicy::Fallback
+		   && config.invalid_bullet_speed_policy != InvalidBulletSpeedPolicy::FailSafe)
+		{
+			throw std::invalid_argument("invalid_bullet_speed_policy has invalid enum value");
+		}
+
+		if(config.armor_switch_strategy != ArmorSwitchStrategy::SpCompat
+		   && config.armor_switch_strategy != ArmorSwitchStrategy::PredictiveHysteresis)
+		{
+			throw std::invalid_argument("armor_switch_strategy has invalid enum value");
+		}
+
+		// PredictiveHysteresis 参数。
+		require_non_negative(config.predictive_switch_hysteresis_rad,
+		                     "predictive_switch_hysteresis_rad");
+
+		if(config.predictive_switch_hysteresis_rad > kPi)
+		{
+			throw std::invalid_argument("predictive_switch_hysteresis_rad must be <= pi");
+		}
+
+		require_non_negative(config.predictive_switch_max_advance_s,
+		                     "predictive_switch_max_advance_s");
 	}
 
 	bool load_aimer_config_from_table(const toml::table& root, AimerConfig& config)
@@ -295,11 +350,25 @@ namespace app::auto_aim
 			{
 				loaded.armor_switch_strategy = ArmorSwitchStrategy::SpCompat;
 			}
+			else if(*v == "predictive_hysteresis")
+			{
+				loaded.armor_switch_strategy = ArmorSwitchStrategy::PredictiveHysteresis;
+			}
 			else
 			{
-				LOG_ERROR(kLogModule, "armor_switch_strategy must be 'sp_compat'");
+				LOG_ERROR(kLogModule,
+				          "armor_switch_strategy must be 'sp_compat' or 'predictive_hysteresis'");
 				return false;
 			}
+		}
+
+		// PredictiveHysteresis 参数（即使 SpCompat 也 required，保持 schema 固定）。
+		if(!read_non_negative("predictive_switch_hysteresis_rad",
+		                      loaded.predictive_switch_hysteresis_rad)
+		   || !read_non_negative("predictive_switch_max_advance_s",
+		                         loaded.predictive_switch_max_advance_s))
+		{
+			return false;
 		}
 
 		try

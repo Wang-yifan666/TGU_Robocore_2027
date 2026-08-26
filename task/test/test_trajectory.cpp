@@ -279,6 +279,21 @@ namespace
 		runner.end();
 	}
 
+	void test_zero_distance(TestRunner& runner)
+	{
+		runner.begin("Zero distance (d == 0)");
+
+		const tools::Trajectory traj(23.0, 0.0, 1.0);
+
+		runner.expect(traj.unsolvable, "d == 0 should be unsolvable");
+		runner.expect(std::isfinite(traj.fly_time) && std::isfinite(traj.pitch),
+		              "fly_time / pitch finite");
+		runner.expect(near(traj.fly_time, 0.0), "fly_time default 0");
+		runner.expect(near(traj.pitch, 0.0), "pitch default 0");
+
+		runner.end();
+	}
+
 } // namespace
 
 int main()
@@ -292,6 +307,7 @@ int main()
 	test_high_target(runner);
 	test_impossible_too_far(runner);
 	test_invalid_speed(runner);
+	test_zero_distance(runner);
 	test_min_fly_time_chosen(runner);
 	test_monotonic_distance(runner);
 

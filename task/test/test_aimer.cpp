@@ -7,6 +7,8 @@
  */
 
 #include "app/auto_aim/aimer.hpp"
+#include "app/auto_aim/vehicle_prediction.hpp"
+#include "tools/maths_tools.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -82,6 +84,20 @@ namespace
 	bool near(double lhs, double rhs, double eps = 1e-9)
 	{
 		return std::abs(lhs - rhs) <= eps;
+	}
+
+	bool vector_near(const Eigen::Vector3d& lhs, const Eigen::Vector3d& rhs, double eps = 1e-9)
+	{
+		return (lhs - rhs).norm() <= eps;
+	}
+
+	auto_aim::AimerConfig make_predictive_config(double hysteresis_rad, double max_advance_s)
+	{
+		auto_aim::AimerConfig c = auto_aim::make_default_aimer_config();
+		c.armor_switch_strategy = auto_aim::ArmorSwitchStrategy::PredictiveHysteresis;
+		c.predictive_switch_hysteresis_rad = hysteresis_rad;
+		c.predictive_switch_max_advance_s = max_advance_s;
+		return c;
 	}
 
 	// ============================================================
@@ -352,7 +368,8 @@ namespace
 		const auto r2 = a2.aim(moving, 1.0, 23.0, &d2);
 
 		runner.expect(r1.valid, "moving target valid");
-		runner.expect(d1.t_hit_s > d1.t_muzzle_s, "t_hit > t_muzzle (positive flight time)");
+		runner.expect(d1.ballistic_arrival_time_s > d1.t_muzzle_s,
+		              "ballistic_arrival > t_muzzle (positive flight time)");
 		runner.expect(d1.refinement_iterations <= config.max_refinement_iterations,
 		              "iterations <= max");
 
@@ -360,7 +377,8 @@ namespace
 		runner.expect(r1.yaw_rad == r2.yaw_rad, "yaw deterministic");
 		runner.expect(r1.pitch_rad == r2.pitch_rad, "pitch deterministic");
 		runner.expect(r1.selected_armor_id == r2.selected_armor_id, "selected deterministic");
-		runner.expect(d1.t_hit_s == d2.t_hit_s, "t_hit deterministic");
+		runner.expect(d1.ballistic_arrival_time_s == d2.ballistic_arrival_time_s,
+		              "ballistic_arrival deterministic");
 
 		// 非收敛仍返回 Success（revision #4）。
 		auto config1 = auto_aim::make_default_aimer_config();
@@ -369,6 +387,268 @@ namespace
 		const auto r3 = a3.aim(moving, 1.0, 23.0);
 		runner.expect(r3.valid && r3.status == auto_aim::AimStatus::Success,
 		              "non-converged still Success");
+
+		runner.end();
+	}
+
+	void test_predictive_advance(TestRunner& runner)
+	{
+		runner.begin("Predictive switch advance");
+
+		auto config = make_predictive_config(0.3, 1.0); // hysteresis 0.3, max_advance 1.0
+
+		auto run = [&](double yaw_rate) {
+			const auto target = make_target(Eigen::Vector3d(3.0, 0.0, 0.0), Eigen::Vector3d::Zero(),
+			                                0.0, yaw_rate, 0.2, 0.0, 0.0, 4,
+			                                auto_aim::ArmorName::Four, 0.0, true, 1);
+
+			auto_aim::Aimer aimer(config);
+			auto_aim::AimerDebugData debug;
+			const auto r = aimer.aim(target, 1.0, 23.0, &debug);
+			runner.expect(r.valid, "valid");
+			return debug.switch_advance_s;
+		};
+
+		runner.expect(near(run(3.0), 0.1), "advance(+3) == hysteresis/abs(w) == 0.1");
+		runner.expect(near(run(-3.0), 0.1), "advance(-3) == 0.1 (symmetric)");
+		runner.expect(near(run(0.0), 0.0), "advance(0) == 0 (no divide by zero)");
+		runner.expect(near(run(0.1), 1.0), "advance clamped to max_advance");
+
+		runner.end();
+	}
+
+	void test_predictive_aim_point_not_advanced(TestRunner& runner)
+	{
+		runner.begin("Predictive aim point not advanced");
+
+		auto config = make_predictive_config(0.3, 1.0);
+		auto_aim::Aimer aimer(config);
+
+		const auto target = make_target(Eigen::Vector3d(3.0, 0.0, 0.0), Eigen::Vector3d::Zero(),
+		                                0.0, 2.0, 0.2, 0.0, 0.0, 4,
+		                                auto_aim::ArmorName::Four, 0.0, true, 1);
+
+		auto_aim::AimerDebugData debug;
+		const auto r = aimer.aim(target, 1.0, 23.0, &debug);
+
+		runner.expect(r.valid, "valid");
+		runner.expect(r.selected_armor_id.has_value(), "selected id present");
+
+		const int sid = *r.selected_armor_id;
+
+		// aim_point 应等于 armors_at_predict[sid]（t_predict 时刻）。
+		const double dt_predict = debug.target_prediction_time_s - target.timestamp_s;
+		const auto vehicle_predict = auto_aim::predict_vehicle(target, dt_predict);
+		const auto armors_predict = auto_aim::armor_hypotheses(vehicle_predict);
+		runner.expect(
+		    vector_near(debug.aim_point_in_world, armors_predict[static_cast<std::size_t>(sid)].position_in_world,
+		                1e-12),
+		    "aim point == armor at target_prediction_time");
+
+		// aim_point 不应等于 armors_at_selection[sid]（t_selection 时刻）。
+		const double dt_selection = debug.armor_selection_time_s - target.timestamp_s;
+		const auto vehicle_selection = auto_aim::predict_vehicle(target, dt_selection);
+		const auto armors_selection = auto_aim::armor_hypotheses(vehicle_selection);
+		runner.expect(
+		    !vector_near(debug.aim_point_in_world,
+		                 armors_selection[static_cast<std::size_t>(sid)].position_in_world, 1e-9),
+		    "aim point != armor at selection time");
+
+		runner.end();
+	}
+
+	void test_predictive_time_semantics(TestRunner& runner)
+	{
+		runner.begin("Predictive debug time semantics");
+
+		auto config = make_predictive_config(0.3, 1.0);
+		auto_aim::Aimer aimer(config);
+
+		const auto target = make_target(Eigen::Vector3d(3.0, 0.0, 0.0), Eigen::Vector3d::Zero(),
+		                                0.0, 2.0, 0.2, 0.0, 0.0, 4,
+		                                auto_aim::ArmorName::Four, 0.0, true, 1);
+
+		auto_aim::AimerDebugData debug;
+		const auto r = aimer.aim(target, 1.0, 23.0, &debug);
+
+		runner.expect(r.valid, "valid");
+		runner.expect(near(debug.armor_selection_time_s,
+		                   debug.target_prediction_time_s + debug.switch_advance_s, 1e-12),
+		              "armor_selection == target_prediction + advance");
+		runner.expect(near(debug.ballistic_arrival_time_s, debug.t_muzzle_s + debug.flight_time_s,
+		                   1e-12),
+		              "ballistic_arrival == t_muzzle + flight_time");
+
+		runner.end();
+	}
+
+	void test_predictive_has_armor_switch_false(TestRunner& runner)
+	{
+		runner.begin("Predictive has_armor_switch false");
+
+		auto config = make_predictive_config(0.3, 1.0);
+		auto_aim::Aimer aimer(config);
+
+		// has_armor_switch=false：无论哪块板 score 最低，恒选 id0。
+		const auto target = make_target(Eigen::Vector3d(0.0, 3.0, 0.0), Eigen::Vector3d::Zero(),
+		                                0.0, 0.0, 0.2, 0.0, 0.0, 4,
+		                                auto_aim::ArmorName::Four, 0.0, false, 1);
+
+		const auto r = aimer.aim(target, 1.0, 23.0);
+		runner.expect(r.valid && r.selected_armor_id == 0, "has_armor_switch=false -> id 0");
+
+		runner.end();
+	}
+
+	void test_predictive_hysteresis(TestRunner& runner)
+	{
+		runner.begin("Predictive hysteresis (no-switch / switch)");
+
+		const double r = 3.0;
+		const auto make_center = [&](double theta) {
+			return Eigen::Vector3d(r * std::cos(theta), r * std::sin(theta), 0.0);
+		};
+		const auto make_t = [&](double theta) {
+			return make_target(make_center(theta), Eigen::Vector3d::Zero(), 0.0, 0.0,
+			                   0.2, 0.0, 0.0, 4, auto_aim::ArmorName::Four, 0.0, true, 1);
+		};
+
+		// no-switch：hysteresis=0.15，θ: π/4 -> π/4+0.05，best 变为 id1 但不够优 -> 保持 id0。
+		{
+			auto config = make_predictive_config(0.15, 1.0);
+			auto_aim::Aimer aimer(config);
+			const auto r1 = aimer.aim(make_t(kPi / 4.0), 1.0, 23.0);
+			runner.expect(r1.selected_armor_id == 0, "frame1 (tie) -> id 0");
+			const auto r2 = aimer.aim(make_t(kPi / 4.0 + 0.05), 1.0, 23.0);
+			runner.expect(r2.selected_armor_id == 0, "no-switch: hysteresis keeps id 0");
+		}
+
+		// switch：hysteresis=0.05，best=id1 明显优于 id0 -> 切到 id1。
+		{
+			auto config = make_predictive_config(0.05, 1.0);
+			auto_aim::Aimer aimer(config);
+			const auto r1 = aimer.aim(make_t(kPi / 4.0), 1.0, 23.0);
+			runner.expect(r1.selected_armor_id == 0, "frame1 (tie) -> id 0");
+			const auto r2 = aimer.aim(make_t(kPi / 4.0 + 0.05), 1.0, 23.0);
+			runner.expect(r2.selected_armor_id == 1, "switch: hysteresis allows id 1");
+		}
+
+		runner.end();
+	}
+
+	void test_predictive_early_switch(TestRunner& runner)
+	{
+		runner.begin("Predictive early switch");
+
+		auto config = make_predictive_config(0.3, 1.0);
+		auto_aim::Aimer aimer(config);
+
+		// 旋转目标：center=(0,3,0) (center_yaw=π/2)，yaw0=0，yaw_rate=5。
+		const auto target = make_target(Eigen::Vector3d(0.0, 3.0, 0.0), Eigen::Vector3d::Zero(),
+		                                0.0, 5.0, 0.2, 0.0, 0.0, 4,
+		                                auto_aim::ArmorName::Four, 0.0, true, 1);
+
+		auto_aim::AimerDebugData debug;
+		const auto r = aimer.aim(target, 0.0, 23.0, &debug);
+
+		runner.expect(r.valid, "valid");
+		runner.expect(debug.switch_advance_s > 0.0, "advance > 0");
+		runner.expect(r.selected_armor_id.has_value(), "selected id present");
+
+		const int sid = *r.selected_armor_id;
+
+		const double dt_predict = debug.target_prediction_time_s - target.timestamp_s;
+		const auto vehicle_predict = auto_aim::predict_vehicle(target, dt_predict);
+		const double center_yaw = std::atan2(vehicle_predict.center.y(), vehicle_predict.center.x());
+
+		auto best_at = [&](double t) {
+			const auto vehicle = auto_aim::predict_vehicle(target, t - target.timestamp_s);
+			const auto armors = auto_aim::armor_hypotheses(vehicle);
+			int best = 0;
+			double best_score = std::numeric_limits<double>::infinity();
+			for(int i = 0; i < static_cast<int>(armors.size()); ++i)
+			{
+				const double score = std::abs(tools::maths_tools::limit_rad(
+				    armors[static_cast<std::size_t>(i)].yaw_in_world - center_yaw));
+				if(score < best_score)
+				{
+					best_score = score;
+					best = i;
+				}
+			}
+			return best;
+		};
+
+		const int best_predict = best_at(debug.target_prediction_time_s);
+		const int best_selection = best_at(debug.armor_selection_time_s);
+
+		runner.expect(sid == best_selection, "selected == best at t_selection");
+		runner.expect(best_selection != best_predict,
+		              "rotation flips best between t_predict and t_selection");
+
+		runner.end();
+	}
+
+	void test_predictive_transaction(TestRunner& runner)
+	{
+		runner.begin("Predictive transaction (rollback)");
+
+		auto config = make_predictive_config(0.15, 1.0);
+		auto_aim::Aimer aimer(config);
+
+		const double r = 3.0;
+		const auto make_theta = [&](double theta) {
+			return make_target(Eigen::Vector3d(r * std::cos(theta), r * std::sin(theta), 0.0),
+			                   Eigen::Vector3d::Zero(), 0.0, 0.0, 0.2, 0.0, 0.0, 4,
+			                   auto_aim::ArmorName::Four, 0.0, true, 1);
+		};
+
+		// frame 1：提交 id 0。
+		auto_aim::AimerDebugData d1;
+		const auto s1 = aimer.aim(make_theta(kPi / 4.0), 1.0, 23.0, &d1);
+		runner.expect(s1.valid && s1.selected_armor_id == 0, "frame1 commit id 0");
+
+		// frame 2：过远 -> 选板成功但弹道不可解（中间会选 id1），失败不提交。
+		const auto far_target = make_target(Eigen::Vector3d(0.0, 100.0, 0.0),
+		                                    Eigen::Vector3d::Zero(), 0.0, 0.0, 0.2, 0.0, 0.0, 4,
+		                                    auto_aim::ArmorName::Four, 0.0, true, 1);
+		auto_aim::AimerDebugData d2;
+		const auto s2 = aimer.aim(far_target, 1.0, 23.0, &d2);
+		runner.expect(!s2.valid && s2.status == auto_aim::AimStatus::BallisticUnsolvable,
+		              "frame2 ballistic unsolvable");
+
+		// frame 3：成功，previous 应仍为 0（frame2 未提交）。
+		auto_aim::AimerDebugData d3;
+		const auto s3 = aimer.aim(make_theta(kPi / 4.0), 1.0, 23.0, &d3);
+		runner.expect(s3.valid, "frame3 valid");
+		runner.expect(d3.previous_predictive_armor_id == 0,
+		              "frame2 failure did not commit (previous still 0)");
+
+		runner.end();
+	}
+
+	void test_predictive_token_reset(TestRunner& runner)
+	{
+		runner.begin("Predictive target token reset");
+
+		auto config = make_predictive_config(0.15, 1.0);
+		auto_aim::Aimer aimer(config);
+
+		const double r = 3.0;
+		const auto make_t = [&](double theta, std::uint64_t token) {
+			return make_target(Eigen::Vector3d(r * std::cos(theta), r * std::sin(theta), 0.0),
+			                   Eigen::Vector3d::Zero(), 0.0, 0.0, 0.2, 0.0, 0.0, 4,
+			                   auto_aim::ArmorName::Four, 0.0, true, token);
+		};
+
+		const auto s1 = aimer.aim(make_t(kPi / 4.0, 1), 1.0, 23.0);
+		runner.expect(s1.selected_armor_id == 0, "token1 frame1 -> id0");
+
+		const auto s2 = aimer.aim(make_t(kPi / 4.0 + 0.05, 1), 1.0, 23.0);
+		runner.expect(s2.selected_armor_id == 0, "token1 frame2 keeps id0 (hysteresis)");
+
+		const auto s3 = aimer.aim(make_t(kPi / 4.0 + 0.05, 2), 1.0, 23.0);
+		runner.expect(s3.selected_armor_id == 1, "new token resets predictive -> best id1");
 
 		runner.end();
 	}
@@ -388,6 +668,14 @@ int main()
 	test_has_armor_switch(runner);
 	test_lock_sequence(runner);
 	test_fixed_point_deterministic(runner);
+	test_predictive_advance(runner);
+	test_predictive_aim_point_not_advanced(runner);
+	test_predictive_time_semantics(runner);
+	test_predictive_has_armor_switch_false(runner);
+	test_predictive_hysteresis(runner);
+	test_predictive_early_switch(runner);
+	test_predictive_transaction(runner);
+	test_predictive_token_reset(runner);
 
 	runner.print_summary();
 

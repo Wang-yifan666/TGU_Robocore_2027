@@ -152,6 +152,16 @@ namespace
 		return o;
 	}
 
+	// armor 2 略微偏移：association 成功匹配 armor 2（armor_id != 0），
+	// 但配合全零 covariance 触发 correction 数值失败。
+	ArmorObservation obs_armor2_perturbed(double timestamp)
+	{
+		ArmorObservation o = obs_armor2(timestamp);
+		o.position_in_world = Eigen::Vector3d(0.21, 0.0, 0.0);
+		o.ypd_in_world = tools::maths_tools::xyz2ypd(o.position_in_world);
+		return o;
+	}
+
 	// ============================================================
 	// Test：Lost empty
 	// ============================================================
@@ -869,6 +879,29 @@ namespace
 		runner.end();
 	}
 
+	void test_has_armor_switch_correction_failure(TestRunner& runner)
+	{
+		runner.begin("has_armor_switch correction failure");
+
+		TrackerConfig config = correction_failure_config();
+		config.temp_lost_max_misses = 2;
+
+		Tracker tracker(config);
+
+		auto r0 = tracker.track({obs_armor0(0.0)}, 0.0);
+		runner.expect(r0.target.has_value() && !r0.target->has_armor_switch,
+		              "init has_armor_switch false");
+
+		// armor 2 association 成功（armor_id != 0），但 correction 数值失败 -> 不置位。
+		auto r1 = tracker.track({obs_armor2_perturbed(0.1)}, 0.1);
+		runner.expect(r1.outcome == TrackUpdateOutcome::CorrectionFailed, "outcome CorrectionFailed");
+		runner.expect(r1.target.has_value(), "target kept (TempLost)");
+		runner.expect(!r1.target->has_armor_switch,
+		              "failed correction keeps has_armor_switch false");
+
+		runner.end();
+	}
+
 } // namespace
 
 int main()
@@ -903,6 +936,7 @@ int main()
 	test_correction_failed_immediate_lost(runner);
 	test_no_association_immediate_lost(runner);
 	test_has_armor_switch_lifecycle(runner);
+	test_has_armor_switch_correction_failure(runner);
 
 	runner.print_summary();
 

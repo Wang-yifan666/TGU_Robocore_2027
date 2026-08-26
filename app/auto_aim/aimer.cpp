@@ -163,6 +163,199 @@ namespace app::auto_aim
 			return std::nullopt;
 		}
 
+		/**
+		 * @brief PredictiveHysteresis 提前切板时间。
+		 *
+		 * 使用 abs(yaw_rate)，正反转在"提前时间长度"上完全对称。
+		 */
+		double compute_switch_advance(const AimerConfig& config, double yaw_rate)
+		{
+			constexpr double kEpsilon = 1e-9;
+			const double abs_w = std::abs(yaw_rate);
+
+			if(abs_w <= kEpsilon)
+			{
+				return 0.0;
+			}
+
+			return std::min(config.predictive_switch_max_advance_s,
+			                config.predictive_switch_hysteresis_rad / abs_w);
+		}
+
+		/**
+		 * @brief PredictiveHysteresis 选板（纯函数，不修改跨帧状态）。
+		 *
+		 * score_i = abs(limit_rad(armors_at_selection[i].yaw - center_yaw_at_predict))。
+		 * 新板需比旧板严格好一个 hysteresis 角才切换（严格 <）。
+		 */
+		int predictive_select_armor(const AimerConfig& config,
+		                            const std::vector<ArmorHypothesis>& armors_at_selection,
+		                            const Eigen::Vector3d& center_at_predict, bool has_armor_switch,
+		                            const std::optional<int>& previous_id)
+		{
+			if(!has_armor_switch || armors_at_selection.empty())
+			{
+				return 0; // SP25 jumped == false 语义：恒选 armor 0。
+			}
+
+			const double center_yaw = std::atan2(center_at_predict.y(), center_at_predict.x());
+
+			const int armor_num = static_cast<int>(armors_at_selection.size());
+			std::vector<double> scores(static_cast<std::size_t>(armor_num));
+
+			int best_id = 0;
+
+			for(int i = 0; i < armor_num; ++i)
+			{
+				scores[static_cast<std::size_t>(i)] = std::abs(tools::maths_tools::limit_rad(
+				    armors_at_selection[static_cast<std::size_t>(i)].yaw_in_world - center_yaw));
+
+				if(i == 0
+				   || scores[static_cast<std::size_t>(i)] < scores[static_cast<std::size_t>(best_id)])
+				{
+					best_id = i;
+				}
+			}
+
+			// Hysteresis：严格 < 才切换（新板需明显优于旧板）。
+			if(previous_id.has_value() && *previous_id >= 0 && *previous_id < armor_num
+			   && best_id != *previous_id)
+			{
+				if(!(scores[static_cast<std::size_t>(best_id)]
+				         + config.predictive_switch_hysteresis_rad
+				     < scores[static_cast<std::size_t>(*previous_id)]))
+				{
+					return *previous_id;
+				}
+			}
+
+			return best_id;
+		}
+
+		/**
+		 * @brief 单次"在 t_predict 时刻求解"的结果。
+		 */
+		struct SolveResult
+		{
+			bool valid = false;
+			AimStatus status = AimStatus::InvalidTarget;
+			int selected_armor_id = 0;
+			Eigen::Vector3d aim_point = Eigen::Vector3d::Zero();
+			double fly_time = 0.0;
+			double pitch = 0.0;
+			double target_prediction_time_s = 0.0;
+			double armor_selection_time_s = 0.0;
+			double switch_advance_s = 0.0;
+		};
+
+		/**
+		 * @brief 在 t_predict 时刻完成一次"预测 -> 选板 -> 弹道"求解。
+		 *
+		 * 选板与瞄准严格分离：选板可提前（t_selection），
+		 * 但 aim_point 恒取自 armors_at_predict[selected_id]（不提前）。
+		 */
+		SolveResult solve_at_prediction_time(const AimerConfig& config, std::optional<int>& lock_id,
+		                                     const std::optional<int>& previous_predictive_id,
+		                                     const TrackedTarget& target, double bullet_speed,
+		                                     double t_predict)
+		{
+			SolveResult result;
+			result.target_prediction_time_s = t_predict;
+
+			const double dt_predict = t_predict - target.timestamp_s;
+			const PredictedVehicle vehicle_at_predict = predict_vehicle(target, dt_predict);
+
+			if(!vehicle_at_predict.center.allFinite())
+			{
+				result.status = AimStatus::PredictionFailed;
+				return result;
+			}
+
+			const std::vector<ArmorHypothesis> armors_at_predict =
+			    armor_hypotheses(vehicle_at_predict);
+
+			if(!finite_hypotheses(armors_at_predict))
+			{
+				result.status = AimStatus::PredictionFailed;
+				return result;
+			}
+
+			int selected_id = 0;
+			double switch_advance = 0.0;
+			double t_selection = t_predict;
+
+			if(config.armor_switch_strategy == ArmorSwitchStrategy::SpCompat)
+			{
+				const std::optional<ArmorHypothesis> aim =
+				    select_armor(config, lock_id, vehicle_at_predict, armors_at_predict,
+				                 target.yaw_rate, target.has_armor_switch, target.name);
+
+				if(!aim)
+				{
+					result.status = AimStatus::NoValidArmor;
+					return result;
+				}
+
+				selected_id = aim->armor_id;
+			}
+			else
+			{
+				switch_advance = compute_switch_advance(config, target.yaw_rate);
+				t_selection = t_predict + switch_advance;
+
+				const double dt_selection = t_selection - target.timestamp_s;
+				const PredictedVehicle vehicle_at_selection = predict_vehicle(target, dt_selection);
+
+				if(!vehicle_at_selection.center.allFinite())
+				{
+					result.status = AimStatus::PredictionFailed;
+					return result;
+				}
+
+				const std::vector<ArmorHypothesis> armors_at_selection =
+				    armor_hypotheses(vehicle_at_selection);
+
+				if(!finite_hypotheses(armors_at_selection))
+				{
+					result.status = AimStatus::PredictionFailed;
+					return result;
+				}
+
+				selected_id =
+				    predictive_select_armor(config, armors_at_selection, vehicle_at_predict.center,
+				                            target.has_armor_switch, previous_predictive_id);
+			}
+
+			if(selected_id < 0 || selected_id >= static_cast<int>(armors_at_predict.size()))
+			{
+				result.status = AimStatus::NoValidArmor;
+				return result;
+			}
+
+			result.selected_armor_id = selected_id;
+			result.armor_selection_time_s = t_selection;
+			result.switch_advance_s = switch_advance;
+
+			// 瞄准点恒来自 armors_at_predict（不提前）。
+			result.aim_point =
+			    armors_at_predict[static_cast<std::size_t>(selected_id)].position_in_world;
+
+			const double d = std::hypot(result.aim_point.x(), result.aim_point.y());
+			const tools::Trajectory trajectory(bullet_speed, d, result.aim_point.z());
+
+			if(trajectory.unsolvable)
+			{
+				result.status = AimStatus::BallisticUnsolvable;
+				return result;
+			}
+
+			result.fly_time = trajectory.fly_time;
+			result.pitch = trajectory.pitch;
+			result.valid = true;
+			result.status = AimStatus::Success;
+			return result;
+		}
+
 	} // namespace
 
 	Aimer::Aimer(const AimerConfig& config): config_(config)
@@ -173,6 +366,7 @@ namespace app::auto_aim
 	void Aimer::reset()
 	{
 		lock_id_.reset();
+		predictive_selected_armor_id_.reset();
 		active_target_token_.reset();
 	}
 
@@ -218,11 +412,20 @@ namespace app::auto_aim
 			return solution;
 		}
 
-		// ---- armor lock 作用域化（target_token 变化即清空）----
+		// ---- 状态作用域化（target_token 变化即同时清空 lock 与 predictive）----
 		if(active_target_token_ != target.target_token)
 		{
 			lock_id_.reset();
+			predictive_selected_armor_id_.reset();
 			active_target_token_ = target.target_token;
+		}
+
+		// ---- transaction：捕获上一帧已提交 predictive 状态 ----
+		const std::optional<int> previous_predictive_id = predictive_selected_armor_id_;
+
+		if(debug != nullptr)
+		{
+			debug->previous_predictive_armor_id = previous_predictive_id;
 		}
 
 		// ---- 弹速处理（fallback / fail_safe）----
@@ -250,42 +453,16 @@ namespace app::auto_aim
 		const double t_muzzle = t_now_s + delay_time;
 
 		// ---- 初始：预测到 t_muzzle，选板并求初始弹道 ----
-		const double dt_muzzle = t_muzzle - target.timestamp_s;
-		const PredictedVehicle vehicle0 = predict_vehicle(target, dt_muzzle);
+		SolveResult current = solve_at_prediction_time(config_, lock_id_, previous_predictive_id,
+		                                               target, bullet_speed, t_muzzle);
 
-		if(!vehicle0.center.allFinite())
+		if(!current.valid)
 		{
-			solution.status = AimStatus::PredictionFailed;
+			solution.status = current.status;
 			return solution;
 		}
 
-		const std::vector<ArmorHypothesis> hypotheses0 = armor_hypotheses(vehicle0);
-		const std::optional<ArmorHypothesis> aim0 =
-		    select_armor(config_, lock_id_, vehicle0, hypotheses0, target.yaw_rate,
-		                 target.has_armor_switch, target.name);
-
-		if(!aim0)
-		{
-			solution.status = AimStatus::NoValidArmor;
-			return solution;
-		}
-
-		const Eigen::Vector3d xyz0 = aim0->position_in_world;
-		const double d0 = std::hypot(xyz0.x(), xyz0.y());
-
-		tools::Trajectory trajectory0(bullet_speed, d0, xyz0.z());
-
-		if(trajectory0.unsolvable)
-		{
-			solution.status = AimStatus::BallisticUnsolvable;
-			return solution;
-		}
-
-		double prev_fly_time = trajectory0.fly_time;
-		tools::Trajectory current_traj = trajectory0;
-		Eigen::Vector3d aim_point = xyz0;
-		std::optional<int> selected_armor_id = aim0->armor_id;
-
+		double prev_fly_time = current.fly_time;
 		int refinement_iterations = 0;
 		bool converged = false;
 
@@ -294,63 +471,51 @@ namespace app::auto_aim
 		{
 			refinement_iterations = iter + 1;
 
-			const double dt_hit = (t_muzzle + prev_fly_time) - target.timestamp_s;
-			const PredictedVehicle vehicle = predict_vehicle(target, dt_hit);
+			const double t_predict = t_muzzle + prev_fly_time;
+			const SolveResult next = solve_at_prediction_time(
+			    config_, lock_id_, previous_predictive_id, target, bullet_speed, t_predict);
 
-			if(!vehicle.center.allFinite())
+			if(!next.valid)
 			{
-				solution.status = AimStatus::PredictionFailed;
+				solution.status = next.status;
 				return solution;
 			}
 
-			const std::vector<ArmorHypothesis> hypotheses = armor_hypotheses(vehicle);
-			const std::optional<ArmorHypothesis> aim =
-			    select_armor(config_, lock_id_, vehicle, hypotheses, target.yaw_rate,
-			                 target.has_armor_switch, target.name);
+			current = next;
 
-			if(!aim)
-			{
-				solution.status = AimStatus::NoValidArmor;
-				return solution;
-			}
-
-			aim_point = aim->position_in_world;
-			selected_armor_id = aim->armor_id;
-
-			const double d = std::hypot(aim_point.x(), aim_point.y());
-			current_traj = tools::Trajectory(bullet_speed, d, aim_point.z());
-
-			if(current_traj.unsolvable)
-			{
-				solution.status = AimStatus::BallisticUnsolvable;
-				return solution;
-			}
-
-			if(std::abs(current_traj.fly_time - prev_fly_time) < config_.flight_time_convergence_s)
+			if(std::abs(current.fly_time - prev_fly_time) < config_.flight_time_convergence_s)
 			{
 				converged = true;
 				break;
 			}
 
-			prev_fly_time = current_traj.fly_time;
+			prev_fly_time = current.fly_time;
 		}
 
 		// ---- 最终角度 ----
 		solution.valid = true;
 		solution.status = AimStatus::Success;
-		solution.yaw_rad = std::atan2(aim_point.y(), aim_point.x()) + config_.yaw_offset_rad;
-		solution.pitch_rad = -(current_traj.pitch + config_.pitch_offset_rad);
-		solution.selected_armor_id = selected_armor_id;
+		solution.yaw_rad =
+		    std::atan2(current.aim_point.y(), current.aim_point.x()) + config_.yaw_offset_rad;
+		solution.pitch_rad = -(current.pitch + config_.pitch_offset_rad);
+		solution.selected_armor_id = current.selected_armor_id;
 		solution.fire_allowed = false; // 本阶段恒 false。
+
+		// ---- transaction commit：仅成功时提交 predictive 状态 ----
+		predictive_selected_armor_id_ = current.selected_armor_id;
 
 		if(debug != nullptr)
 		{
 			debug->t_muzzle_s = t_muzzle;
-			debug->t_hit_s = t_muzzle + current_traj.fly_time;
-			debug->flight_time_s = current_traj.fly_time;
-			debug->aim_point_in_world = aim_point;
+			debug->target_prediction_time_s = current.target_prediction_time_s;
+			debug->ballistic_arrival_time_s = t_muzzle + current.fly_time;
+			debug->armor_selection_time_s = current.armor_selection_time_s;
+			debug->switch_advance_s = current.switch_advance_s;
+			debug->flight_time_s = current.fly_time;
+			debug->aim_point_in_world = current.aim_point;
 			debug->refinement_iterations = refinement_iterations;
 			debug->ballistic_converged = converged;
+			debug->pending_predictive_armor_id = current.selected_armor_id;
 		}
 
 		return solution;

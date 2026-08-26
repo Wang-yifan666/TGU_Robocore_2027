@@ -115,6 +115,8 @@ fallback_bullet_speed_mps = 23.0
 max_refinement_iterations = 10
 flight_time_convergence_s = 0.001
 armor_switch_strategy = "sp_compat"
+predictive_switch_hysteresis_rad = 0.2617993877991494
+predictive_switch_max_advance_s = 0.2
 )";
 
 	std::string replace(std::string source, std::string_view from, std::string_view to)
@@ -244,6 +246,96 @@ armor_switch_strategy = "sp_compat"
 		runner.end();
 	}
 
+	void test_predictive_config(TestRunner& runner)
+	{
+		runner.begin("Predictive config");
+
+		auto_aim::AimerConfig config;
+
+		const std::string predictive_toml =
+		    replace(kValidToml, "\"sp_compat\"", "\"predictive_hysteresis\"");
+
+		runner.expect(load_from_string(predictive_toml, config), "predictive_hysteresis loads");
+		runner.expect(config.armor_switch_strategy == auto_aim::ArmorSwitchStrategy::PredictiveHysteresis,
+		              "strategy == predictive_hysteresis");
+		runner.expect(near(config.predictive_switch_hysteresis_rad, 0.2617993877991494),
+		              "hysteresis rad loaded");
+		runner.expect(near(config.predictive_switch_max_advance_s, 0.2), "max advance loaded");
+
+		// NaN / Inf / negative -> false。
+		runner.expect(!load_from_string(replace(kValidToml,
+		                                        "predictive_switch_hysteresis_rad = 0.2617993877991494",
+		                                        "predictive_switch_hysteresis_rad = nan"),
+		                                config),
+		              "NaN hysteresis -> false");
+		runner.expect(!load_from_string(replace(kValidToml,
+		                                        "predictive_switch_hysteresis_rad = 0.2617993877991494",
+		                                        "predictive_switch_hysteresis_rad = inf"),
+		                                config),
+		              "Inf hysteresis -> false");
+		runner.expect(!load_from_string(replace(kValidToml, "predictive_switch_max_advance_s = 0.2",
+		                                        "predictive_switch_max_advance_s = -0.1"),
+		                                config),
+		              "negative max advance -> false");
+
+		runner.end();
+	}
+
+	void test_relationship_validation(TestRunner& runner)
+	{
+		runner.begin("Relationship validation");
+
+		auto_aim::AimerConfig config;
+
+		runner.expect(!load_from_string(replace(kValidToml, "coming_angle_rad = 1.0471204188481676",
+		                                        "coming_angle_rad = 0.1"),
+		                                config),
+		              "coming < leaving -> false");
+		runner.expect(!load_from_string(replace(kValidToml,
+		                                        "outpost_coming_angle_rad = 1.2216404886569256",
+		                                        "outpost_coming_angle_rad = 0.1"),
+		                                config),
+		              "outpost coming < leaving -> false");
+		runner.expect(!load_from_string(replace(kValidToml,
+		                                        "shootable_angle_threshold_rad = 1.0471204188481676",
+		                                        "shootable_angle_threshold_rad = 4.0"),
+		                                config),
+		              "shootable > pi -> false");
+		runner.expect(!load_from_string(replace(kValidToml, "fallback_bullet_speed_mps = 23.0",
+		                                        "fallback_bullet_speed_mps = 10.0"),
+		                                config),
+		              "fallback < min_valid (fallback policy) -> false");
+
+		// enum 程序化非法值。
+		auto bad_policy = auto_aim::make_default_aimer_config();
+		bad_policy.invalid_bullet_speed_policy = static_cast<auto_aim::InvalidBulletSpeedPolicy>(99);
+		bool threw = false;
+		try
+		{
+			auto_aim::validate_aimer_config(bad_policy);
+		}
+		catch(const std::exception&)
+		{
+			threw = true;
+		}
+		runner.expect(threw, "invalid InvalidBulletSpeedPolicy enum throws");
+
+		auto bad_strategy = auto_aim::make_default_aimer_config();
+		bad_strategy.armor_switch_strategy = static_cast<auto_aim::ArmorSwitchStrategy>(99);
+		threw = false;
+		try
+		{
+			auto_aim::validate_aimer_config(bad_strategy);
+		}
+		catch(const std::exception&)
+		{
+			threw = true;
+		}
+		runner.expect(threw, "invalid ArmorSwitchStrategy enum throws");
+
+		runner.end();
+	}
+
 } // namespace
 
 int main()
@@ -258,6 +350,8 @@ int main()
 	test_non_finite_values(runner);
 	test_negative_values(runner);
 	test_compatibility_defaults(runner);
+	test_predictive_config(runner);
+	test_relationship_validation(runner);
 
 	runner.print_summary();
 

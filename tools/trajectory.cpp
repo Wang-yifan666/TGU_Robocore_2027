@@ -14,16 +14,17 @@ namespace tools
 
 	namespace
 	{
-		constexpr double kGravity = 9.7833; // m/s^2
+		constexpr double kGravity = 9.7833;    // m/s^2
+		constexpr double kMinDistanceM = 1e-9; // 水平距离下限（m），避免二次方程分母为 0。
 	} // namespace
 
 	Trajectory::Trajectory(double v0_mps, double d_m, double h_m)
 	{
 		// Safety hardening（不改变合法 SP25 输入的算法）：
-		// 弹速非法 / 距离或高度非有限 / 负距离，直接判为无解，
-		// 避免除零或 NaN 传播。
-		if(!std::isfinite(v0_mps) || v0_mps <= 0.0 || !std::isfinite(d_m) || d_m < 0.0
-		   || !std::isfinite(h_m))
+		// 弹速非法 / 距离或高度非有限 / 距离 <= 0，直接判为无解，
+		// 避免除零或 NaN 传播。不实现竖直射击特殊弹道。
+		if(!std::isfinite(v0_mps) || v0_mps <= 0.0 || !std::isfinite(d_m)
+		   || d_m <= kMinDistanceM || !std::isfinite(h_m))
 		{
 			unsolvable = true;
 			return;
