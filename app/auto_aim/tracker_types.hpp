@@ -155,6 +155,12 @@ namespace app::auto_aim
 		ArmorType type = ArmorType::Unknown;
 		ArmorPriority priority = ArmorPriority::Unknown;
 
+		/// 本 tracker 生命周期的稳定标识（每次重建 Target 自增），供 Aimer 作用域化 armor lock。
+		std::uint64_t target_token = 0;
+
+		/// 本生命周期内是否已匹配到非 0 装甲板（SP25 jumped 等价）。
+		bool has_armor_switch = false;
+
 		/// 本帧 correction 前（predict 之后）预测出的车辆中心。
 		/// 注意：predict 之后即有效，即使本帧 NoAssociation 也会保留
 		/// 该先验预测中心（用于 board-switch 连续性指标）。

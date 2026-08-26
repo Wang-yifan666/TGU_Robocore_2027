@@ -351,6 +351,8 @@ namespace app::auto_aim
 		snapshot.name = target_->name();
 		snapshot.type = target_->type();
 		snapshot.priority = target_->priority();
+		snapshot.target_token = target_generation_;
+		snapshot.has_armor_switch = target_->has_armor_switch();
 
 		snapshot.center_in_world =
 		    Eigen::Vector3d(x(kStateX), x(kStateY), x(kStateZ));
@@ -398,6 +400,7 @@ namespace app::auto_aim
 
 			const double radius = radius_for(*candidate);
 
+			++target_generation_;
 			target_.emplace(*candidate, radius, config_.initial_covariance, config_.process_noise);
 			hit_count_ = 1;
 			miss_count_ = 0;
@@ -431,6 +434,7 @@ namespace app::auto_aim
 
 			const double radius = radius_for(*candidate);
 
+			++target_generation_;
 			target_.emplace(*candidate, radius, config_.initial_covariance, config_.process_noise);
 			hit_count_ = 1;
 			miss_count_ = 0;

@@ -14,6 +14,11 @@ add_test(NAME test_association COMMAND test_association)
 add_test(NAME test_tracker COMMAND test_tracker)
 add_test(NAME test_tracker_config COMMAND test_tracker_config)
 add_test(NAME test_tracker_spherical_equivalence COMMAND test_tracker_spherical_equivalence)
+add_test(NAME test_trajectory COMMAND test_trajectory)
+add_test(NAME test_vehicle_prediction COMMAND test_vehicle_prediction)
+add_test(NAME test_aimer_config COMMAND test_aimer_config)
+add_test(NAME test_aimer COMMAND test_aimer)
+add_test(NAME test_aimer_pipeline COMMAND test_aimer_pipeline)
 
 add_executable(sentry sentry.cpp)
 add_executable(read_toml test/read_toml.cpp)
@@ -39,6 +44,11 @@ add_executable(test_tracker_spherical_equivalence test/test_tracker_spherical_eq
 add_executable(test_tracker_replay test/test_tracker_replay.cpp)
 add_executable(test_tracker_visual test/test_tracker_visual.cpp)
 add_executable(test_all_pipeline test/test_all_pipeline.cpp)
+add_executable(test_trajectory test/test_trajectory.cpp)
+add_executable(test_vehicle_prediction test/test_vehicle_prediction.cpp)
+add_executable(test_aimer_config test/test_aimer_config.cpp)
+add_executable(test_aimer test/test_aimer.cpp)
+add_executable(test_aimer_pipeline test/test_aimer_pipeline.cpp)
 
 target_compile_definitions(test_logger PRIVATE
     PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
@@ -58,6 +68,36 @@ target_link_libraries(sentry PRIVATE
 )
 
 target_link_libraries(test_logger PRIVATE tools)
+
+target_link_libraries(test_trajectory PRIVATE tools)
+
+target_link_libraries(test_vehicle_prediction PRIVATE
+    app
+    tools
+    ${OpenCV_LIBS}
+    Eigen3::Eigen
+)
+
+target_link_libraries(test_aimer_config PRIVATE
+    app
+    tools
+    ${OpenCV_LIBS}
+    Eigen3::Eigen
+)
+
+target_link_libraries(test_aimer PRIVATE
+    app
+    tools
+    ${OpenCV_LIBS}
+    Eigen3::Eigen
+)
+
+target_link_libraries(test_aimer_pipeline PRIVATE
+    app
+    tools
+    ${OpenCV_LIBS}
+    Eigen3::Eigen
+)
 
 target_link_libraries(test_foxglove PRIVATE tools)
 

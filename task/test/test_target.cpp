@@ -659,26 +659,67 @@ namespace
 		Eigen::VectorXd z(4);
 		Eigen::VectorXd h(4);
 
-		// index 0 (bearing_yaw)：±pi 边界 -> wrap 到 0。
+		// ============================================================
+		// 判别性用例：raw residual 恰好 = ±pi。
+		// limit_rad((-pi, pi]) 返回 +pi；若误用 wrap_angle([-pi, pi)) 会返回 -pi，
+		// 用于杀死 limit_rad -> wrap_angle mutant。
+		// ============================================================
+
+		// index 0 (bearing_yaw)。
+		z << kPi, 0.0, 1.0, 0.0;
+		h << 0.0, 0.0, 1.0, 0.0;
+		Eigen::VectorXd r = app::auto_aim::Target::measurement_residual(z, h);
+		runner.expect(near(r(0), kPi, 1e-12), "bearing_yaw raw +pi -> +pi");
+
+		z << -kPi, 0.0, 1.0, 0.0;
+		h << 0.0, 0.0, 1.0, 0.0;
+		r = app::auto_aim::Target::measurement_residual(z, h);
+		runner.expect(near(r(0), kPi, 1e-12), "bearing_yaw raw -pi -> +pi");
+
+		// index 1 (pitch)。
+		z << 0.0, kPi, 1.0, 0.0;
+		h << 0.0, 0.0, 1.0, 0.0;
+		r = app::auto_aim::Target::measurement_residual(z, h);
+		runner.expect(near(r(1), kPi, 1e-12), "pitch raw +pi -> +pi");
+
+		z << 0.0, -kPi, 1.0, 0.0;
+		h << 0.0, 0.0, 1.0, 0.0;
+		r = app::auto_aim::Target::measurement_residual(z, h);
+		runner.expect(near(r(1), kPi, 1e-12), "pitch raw -pi -> +pi");
+
+		// index 3 (armor_yaw)。
+		z << 0.0, 0.0, 1.0, kPi;
+		h << 0.0, 0.0, 1.0, 0.0;
+		r = app::auto_aim::Target::measurement_residual(z, h);
+		runner.expect(near(r(3), kPi, 1e-12), "armor_yaw raw +pi -> +pi");
+
+		z << 0.0, 0.0, 1.0, -kPi;
+		h << 0.0, 0.0, 1.0, 0.0;
+		r = app::auto_aim::Target::measurement_residual(z, h);
+		runner.expect(near(r(3), kPi, 1e-12), "armor_yaw raw -pi -> +pi");
+
+		// ============================================================
+		// 非判别 sanity：raw residual = ±2pi -> 0（两种 convention 相同）。
+		// ============================================================
 		z << kPi, 0.0, 5.0, 0.0;
 		h << -kPi, 0.0, 3.0, 0.0;
-		Eigen::VectorXd r = app::auto_aim::Target::measurement_residual(z, h);
-		runner.expect(near(r(0), 0.0, 1e-12), "bearing_yaw wraps across ±pi");
+		r = app::auto_aim::Target::measurement_residual(z, h);
+		runner.expect(near(r(0), 0.0, 1e-12), "bearing_yaw 2pi -> 0 (sanity)");
 		runner.expect(near(r(2), 2.0, 1e-12), "distance not wrapped (5-3=2)");
 
-		// index 1 (pitch)：大角度 wrap（raw 6.0 -> 6.0-2pi）。
+		// index 1 大角度 wrap（raw 6.0 -> 6.0-2pi）。
 		z << 0.0, 3.0, 1.0, 0.0;
 		h << 0.0, -3.0, 1.0, 0.0;
 		r = app::auto_aim::Target::measurement_residual(z, h);
-		runner.expect(near(r(1), 6.0 - kTwoPi, 1e-9), "pitch wraps");
+		runner.expect(near(r(1), 6.0 - kTwoPi, 1e-9), "pitch 6.0 -> 6.0-2pi (sanity)");
 
-		// index 3 (armor_yaw)：±pi 边界 -> 0。
+		// index 3 2pi -> 0。
 		z << 0.0, 0.0, 1.0, kPi;
 		h << 0.0, 0.0, 1.0, -kPi;
 		r = app::auto_aim::Target::measurement_residual(z, h);
-		runner.expect(near(r(3), 0.0, 1e-12), "armor_yaw wraps across ±pi");
+		runner.expect(near(r(3), 0.0, 1e-12), "armor_yaw 2pi -> 0 (sanity)");
 
-		// exact +pi/-pi convention。
+		// limit_rad 函数本身的 convention。
 		runner.expect(near(tools::maths_tools::limit_rad(kPi), kPi, 1e-12), "limit_rad(+pi) == +pi");
 		runner.expect(near(tools::maths_tools::limit_rad(-kPi), kPi, 1e-12), "limit_rad(-pi) == +pi");
 

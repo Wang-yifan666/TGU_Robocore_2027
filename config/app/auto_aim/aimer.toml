@@ -1,0 +1,42 @@
+# Aimer 配置（迁移自 sp_vision_25 aimer YAML + 代码硬编码常量）。
+# 单位约定：角度 rad、时间 s、速度 m/s、角速度 rad/s、长度 m。
+# 所有字段生产 required，缺失即加载失败。
+
+[aimer]
+
+# 零偏（rad）
+yaw_offset_rad   = 0.0
+pitch_offset_rad = 0.0
+
+# 非前哨站 coming/leaving 角度（rad，SP25 原始 degree，除以 57.3）
+coming_angle_rad  = 1.0471204188481676 # 60 / 57.3
+leaving_angle_rad = 0.3490401396160559 # 20 / 57.3
+
+# 前哨站 coming/leaving 角度（rad）
+outpost_coming_angle_rad  = 1.2216404886569256 # 70 / 57.3
+outpost_leaving_angle_rad = 0.5235602094240838 # 30 / 57.3
+
+# 非陀螺分支可射击范围半角（rad）
+shootable_angle_threshold_rad = 1.0471204188481676 # 60 / 57.3
+
+# 高低速延迟（s）与决策阈值（rad/s，保持 SP25 signed comparison）
+high_speed_delay_s = 0.0
+low_speed_delay_s  = 0.0
+decision_speed_rad_s = 10.0
+
+# 非陀螺判断：true 用 abs(radius)，false 用 abs(yaw_rate)
+use_radius_for_gyro_detection = true
+non_gyro_radius_threshold_m       = 2.0
+non_gyro_yaw_rate_threshold_rad_s = 2.0
+
+# 非法弹速策略与参数
+invalid_bullet_speed_policy = "fallback" # "fallback" | "fail_safe"
+min_valid_bullet_speed_mps  = 14.0
+fallback_bullet_speed_mps   = 23.0
+
+# 弹道迭代（不含 initial solve）
+max_refinement_iterations = 10
+flight_time_convergence_s = 0.001
+
+# 选板策略（本阶段仅 sp_compat）
+armor_switch_strategy = "sp_compat"

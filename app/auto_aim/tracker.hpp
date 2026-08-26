@@ -152,6 +152,8 @@ namespace app::auto_aim
 
 		std::optional<Target> target_;
 
+		std::uint64_t target_generation_ = 0;
+
 		int hit_count_ = 0;
 		int miss_count_ = 0;
 

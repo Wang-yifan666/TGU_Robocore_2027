@@ -1,6 +1,8 @@
 add_library(app STATIC
     auto_aim/armor.cpp
     auto_aim/armor_config.cpp
+    auto_aim/aimer.cpp
+    auto_aim/aimer_config.cpp
     auto_aim/association.cpp
     auto_aim/auto_aim.cpp
     auto_aim/solver.cpp
@@ -8,6 +10,7 @@ add_library(app STATIC
     auto_aim/target.cpp
     auto_aim/tracker.cpp
     auto_aim/tracker_config.cpp
+    auto_aim/vehicle_prediction.cpp
 
     auto_aim/detector/detector.cpp
     auto_aim/detector/detector_config.cpp

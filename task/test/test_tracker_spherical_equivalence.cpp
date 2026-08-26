@@ -369,19 +369,43 @@ ddistance_dx, ddistance_dy, ddistance_dz;
 	{
 		runner.begin("Equivalence residual");
 
-		Eigen::VectorXd z(4);
-		Eigen::VectorXd h(4);
-		z << 3.0, -0.2, 5.0, 3.0;
-		h << -3.0, 0.1, 3.0, -3.0;
+		// 覆盖精确 ±pi 边界（判别 limit_rad vs wrap_angle）与普通大角度。
+		const double z_cases[][4] = {
+		    {kPi, 0.0, 1.0, 0.0},   // bearing_yaw raw +pi
+		    {-kPi, 0.0, 1.0, 0.0},  // bearing_yaw raw -pi
+		    {0.0, kPi, 1.0, 0.0},   // pitch raw +pi
+		    {0.0, -kPi, 1.0, 0.0},  // pitch raw -pi
+		    {0.0, 0.0, 1.0, kPi},   // armor_yaw raw +pi
+		    {0.0, 0.0, 1.0, -kPi},  // armor_yaw raw -pi
+		    {3.0, -0.2, 5.0, 3.0}}; // 普通大角度
 
-		const Eigen::VectorXd r = app::auto_aim::Target::measurement_residual(z, h);
+		const double h_cases[][4] = {
+		    {0.0, 0.0, 1.0, 0.0},
+		    {0.0, 0.0, 1.0, 0.0},
+		    {0.0, 0.0, 1.0, 0.0},
+		    {0.0, 0.0, 1.0, 0.0},
+		    {0.0, 0.0, 1.0, 0.0},
+		    {0.0, 0.0, 1.0, 0.0},
+		    {-3.0, 0.1, 3.0, -3.0}};
 
-		Eigen::VectorXd expected = z - h;
-		expected(0) = legacy_limit_rad(expected(0));
-		expected(1) = legacy_limit_rad(expected(1));
-		expected(3) = legacy_limit_rad(expected(3));
+		constexpr int kCaseCount = 7;
 
-		runner.expect((r - expected).norm() <= 1e-12, "residual == legacy z_subtract");
+		for(int i = 0; i < kCaseCount; ++i)
+		{
+			Eigen::VectorXd z(4);
+			Eigen::VectorXd h(4);
+			z << z_cases[i][0], z_cases[i][1], z_cases[i][2], z_cases[i][3];
+			h << h_cases[i][0], h_cases[i][1], h_cases[i][2], h_cases[i][3];
+
+			const Eigen::VectorXd r = app::auto_aim::Target::measurement_residual(z, h);
+
+			Eigen::VectorXd expected = z - h;
+			expected(0) = legacy_limit_rad(expected(0));
+			expected(1) = legacy_limit_rad(expected(1));
+			expected(3) = legacy_limit_rad(expected(3));
+
+			runner.expect((r - expected).norm() <= 1e-12, "residual == legacy z_subtract");
+		}
 
 		runner.end();
 	}

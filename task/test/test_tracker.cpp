@@ -826,6 +826,49 @@ namespace
 		runner.end();
 	}
 
+	// ============================================================
+	// Test：has_armor_switch / target_token 生命周期
+	// ============================================================
+
+	void test_has_armor_switch_lifecycle(TestRunner& runner)
+	{
+		runner.begin("has_armor_switch / target_token lifecycle");
+
+		TrackerConfig config = default_config();
+		config.detecting_confirm_hits = 1; // init 直接进入 Tracking。
+
+		Tracker tracker(config);
+
+		// 1. 初始化（匹配 armor 0）→ has_armor_switch == false，token 首次自增。
+		auto r1 = tracker.track({obs_armor0(0.0)}, 0.0);
+		runner.expect(r1.target.has_value(), "init produces target");
+		runner.expect(!r1.target->has_armor_switch, "init has_armor_switch == false");
+		const auto token1 = r1.target->target_token;
+		runner.expect(token1 != 0, "first token should be non-zero (generation incremented)");
+
+		// 2. 切到 armor 2（id != 0）→ has_armor_switch == true，token 不变。
+		auto r2 = tracker.track({obs_armor2(0.1)}, 0.1);
+		runner.expect(r2.target.has_value(), "correction keeps target");
+		runner.expect(r2.target->has_armor_switch, "armor switch sets has_armor_switch == true");
+		runner.expect(r2.target->target_token == token1, "same target keeps same token");
+
+		// 3. miss → TempLost：保持 true，token 不变。
+		auto r3 = tracker.track({}, 0.2);
+		runner.expect(r3.target.has_value(), "miss -> TempLost keeps target");
+		runner.expect(r3.target->state == TrackerState::TempLost, "state == TempLost");
+		runner.expect(r3.target->has_armor_switch, "TempLost keeps has_armor_switch == true");
+		runner.expect(r3.target->target_token == token1, "TempLost keeps token");
+
+		// 4. reset → 重新 init：has_armor_switch 复位 false，token 变化。
+		tracker.reset();
+		auto r4 = tracker.track({obs_armor0(0.3)}, 0.3);
+		runner.expect(r4.target.has_value(), "re-init produces target");
+		runner.expect(!r4.target->has_armor_switch, "rebuild resets has_armor_switch == false");
+		runner.expect(r4.target->target_token != token1, "rebuild gets new token");
+
+		runner.end();
+	}
+
 } // namespace
 
 int main()
@@ -859,6 +902,7 @@ int main()
 	test_correction_failed_keeps_target(runner);
 	test_correction_failed_immediate_lost(runner);
 	test_no_association_immediate_lost(runner);
+	test_has_armor_switch_lifecycle(runner);
 
 	runner.print_summary();
 

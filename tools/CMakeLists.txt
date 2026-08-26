@@ -5,6 +5,7 @@ add_library(tools STATIC
     logger.cpp
     logger_config_loader.cpp
     maths_tools.cpp
+    trajectory.cpp
     foxglove_comm.cpp
 )
 

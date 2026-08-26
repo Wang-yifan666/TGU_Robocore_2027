@@ -254,6 +254,14 @@ namespace app::auto_aim
 		ArmorType type() const noexcept;
 		ArmorPriority priority() const noexcept;
 
+		/**
+		 * @brief 本 tracker 生命周期内是否已确认匹配到非 0 装甲板（SP25 jumped 等价）。
+		 *
+		 * 单调生命周期状态：一旦置 true 在本 Target 生命周期内不再回落；
+		 * Target 重建（Lost -> reacquire）时自然复位为 false。
+		 */
+		bool has_armor_switch() const noexcept;
+
 	private:
 		/**
 		 * @brief 给定 armor_id 计算 theta / r / use_alternate 等几何量。
@@ -280,6 +288,8 @@ namespace app::auto_aim
 		ArmorType type_ = ArmorType::Unknown;
 		ArmorPriority priority_ = ArmorPriority::Unknown;
 		int armor_count_ = 4;
+
+		bool has_armor_switch_ = false;
 	};
 
 } // namespace app::auto_aim

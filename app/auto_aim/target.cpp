@@ -358,6 +358,13 @@ namespace app::auto_aim
 			throw std::invalid_argument("armor_id out of range");
 		}
 
+		// has_armor_switch：本生命周期内是否匹配到过非 0 装甲板（对应 SP25 jumped）。
+		// 置位发生在 EKF update 之前，与 SP25 在 update() 内按匹配 id 置位一致。
+		if(armor_id != 0)
+		{
+			has_armor_switch_ = true;
+		}
+
 		// z / h / H / R 全部来自直接可测的 production helper，不在 correct 内重复公式。
 		const Eigen::VectorXd z = measurement_vector(observation);
 
@@ -473,6 +480,11 @@ namespace app::auto_aim
 	ArmorPriority Target::priority() const noexcept
 	{
 		return priority_;
+	}
+
+	bool Target::has_armor_switch() const noexcept
+	{
+		return has_armor_switch_;
 	}
 
 	Target::ArmorGeometry Target::geometry(const Eigen::VectorXd& x, int armor_id) const

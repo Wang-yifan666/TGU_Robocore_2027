@@ -1,0 +1,37 @@
+/**
+ * @file aimer_config.hpp
+ * @brief Aimer 配置加载：TOML -> AimerConfig。
+ *
+ * 职责：
+ * - 所有生产字段显式 required，缺失即失败，不做 silent fallback；
+ * - 校验数值 finite / 符号 / 单位；
+ * - make_default_aimer_config() 仅用于 programmatic / 单元测试。
+ */
+
+#ifndef TGU_ROBOCORE_2027_AUTO_AIM_AIMER_CONFIG_HPP
+#define TGU_ROBOCORE_2027_AUTO_AIM_AIMER_CONFIG_HPP
+
+#include <string>
+
+#include "app/auto_aim/aimer.hpp"
+#include "tools/tomlpp.hpp"
+
+namespace app::auto_aim
+{
+
+	/**
+	 * @brief 从已解析的 toml::table 加载 AimerConfig（纯逻辑，便于单测）。
+	 * @param root 已解析的 TOML 根表，需含 [aimer] 表。
+	 * @param config 输出配置。
+	 * @return true 加载并校验成功；false 字段缺失或数值非法。
+	 */
+	bool load_aimer_config_from_table(const toml::table& root, AimerConfig& config);
+
+	/**
+	 * @brief 从 TOML 文件加载 AimerConfig。
+	 */
+	bool load_aimer_config(const std::string& config_path, AimerConfig& config);
+
+} // namespace app::auto_aim
+
+#endif // TGU_ROBOCORE_2027_AUTO_AIM_AIMER_CONFIG_HPP
