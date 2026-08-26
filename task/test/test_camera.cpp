@@ -5,6 +5,7 @@
 #include <arv.h>
 #include <iostream>
 #include <opencv2/opencv.hpp>
+#include "test_logging.hpp"
 
 static bool print_error_and_clear(GError*& error, const char* where)
 {
@@ -19,6 +20,7 @@ static bool print_error_and_clear(GError*& error, const char* where)
 
 int main()
 {
+	test_logging::init("test_camera");
 	arv_update_device_list();
 
 	int n_devices = arv_get_n_devices();

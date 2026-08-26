@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <string>
 #include <string_view>
+#include "test_logging.hpp"
 
 namespace
 {
@@ -642,6 +643,7 @@ default_4 = 0.2
 
 int main()
 {
+	test_logging::init("test_tracker_config");
 	std::printf("=== TrackerConfig Loader Test Suite ===\n\n");
 
 	TestRunner runner;

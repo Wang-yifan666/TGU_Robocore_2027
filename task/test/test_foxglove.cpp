@@ -5,8 +5,12 @@
 // #include "tools/foxglove_comm.hpp"
 // #include <iostream>
 //
+
+#include "test_logging.hpp"
+
 int main()
 {
+	test_logging::init("test_foxglove");
 	//     tools::FoxGloveComm comm("0.0.0.0", 8765);
 	//
 	//     if (!comm.ok()) {

@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdio>
 #include <string_view>
+#include "test_logging.hpp"
 
 namespace
 {
@@ -160,6 +161,7 @@ namespace
 
 int main()
 {
+	test_logging::init("test_aimer_pipeline");
 	std::printf("=== Aimer Pipeline Test Suite ===\n\n");
 
 	TestRunner runner;

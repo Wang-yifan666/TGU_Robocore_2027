@@ -18,6 +18,7 @@
 #include <Eigen/Dense>
 
 #include "tools/maths_tools.hpp"
+#include "test_logging.hpp"
 
 namespace
 {
@@ -875,6 +876,7 @@ namespace
 
 int main()
 {
+	test_logging::init("test_target");
 	std::printf("=== Target Module Test Suite ===\n\n");
 
 	TestRunner runner;

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <opencv2/core.hpp>
+#include "test_logging.hpp"
 
 namespace
 {
@@ -329,6 +330,7 @@ namespace
 
 int main()
 {
+	test_logging::init("test_openvino_inference");
 	std::printf("=== OpenVINO Inference Test Suite ===\n\n");
 
 	TestRunner runner;

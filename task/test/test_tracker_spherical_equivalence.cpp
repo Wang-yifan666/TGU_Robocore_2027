@@ -14,6 +14,7 @@
 #include <string>
 
 #include <Eigen/Dense>
+#include "test_logging.hpp"
 
 namespace
 {
@@ -455,6 +456,7 @@ ddistance_dx, ddistance_dy, ddistance_dz;
 
 int main()
 {
+	test_logging::init("test_tracker_spherical_equivalence");
 	std::printf("=== Tracker Spherical Source-Equivalence Test Suite ===\n\n");
 
 	TestRunner runner;

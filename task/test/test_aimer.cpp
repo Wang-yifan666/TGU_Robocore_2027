@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <limits>
 #include <string_view>
+#include "test_logging.hpp"
 
 namespace
 {
@@ -657,6 +658,7 @@ namespace
 
 int main()
 {
+	test_logging::init("test_aimer");
 	std::printf("=== Aimer Test Suite ===\n\n");
 
 	TestRunner runner;

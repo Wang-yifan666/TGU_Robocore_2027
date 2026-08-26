@@ -36,6 +36,7 @@
 #include <Eigen/Geometry>
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
+#include "test_logging.hpp"
 
 namespace
 {
@@ -412,6 +413,7 @@ namespace
 
 int main()
 {
+	test_logging::init("test_tracker_replay");
 	const std::string project_root = std::string(PROJECT_SOURCE_DIR) + "/";
 
 	const std::string video_path = project_root + "data/demo/demo.avi";

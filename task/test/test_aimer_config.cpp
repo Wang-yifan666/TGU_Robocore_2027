@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <string>
 #include <string_view>
+#include "test_logging.hpp"
 
 namespace
 {
@@ -340,6 +341,7 @@ predictive_switch_max_advance_s = 0.2
 
 int main()
 {
+	test_logging::init("test_aimer_config");
 	std::printf("=== AimerConfig Loader Test Suite ===\n\n");
 
 	TestRunner runner;

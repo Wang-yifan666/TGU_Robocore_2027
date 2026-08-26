@@ -3,6 +3,7 @@
 #include "io/serial/serial.hpp"
 #include "tools/logger.hpp"
 #include "tools/crc.hpp"
+#include "test_logging.hpp"
 
 struct __attribute__((packed)) RecvPackage
 {
@@ -20,11 +21,7 @@ struct __attribute__((packed)) SendPackage
 
 int main()
 {
-	tools::LoggerConfig cfg{.level = tools::LogLevel::Debug,
-	                        .enable_console = true,
-	                        .enable_file = false,
-	                        .file_path = "logs.txt"};
-	tools::Logger::instance().init(cfg);
+	test_logging::init("test_serial");
 	static constexpr const char *MODULE = "MAIN";
 
 	io::Serial serial;

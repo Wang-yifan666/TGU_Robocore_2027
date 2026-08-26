@@ -6,14 +6,11 @@
 #include "io/usbcamera/usbcamera.hpp"
 #include "io/usbcamera/usbcamera_config.hpp"
 #include "tools/logger.hpp"
+#include "test_logging.hpp"
 
 int main()
 {
-	tools::LoggerConfig logger_config;
-	logger_config.level = tools::LogLevel::Debug;
-	logger_config.enable_console = true;
-	logger_config.enable_file = false;
-	tools::Logger::instance().init(logger_config);
+	test_logging::init("test_usb_camera");
 
 	io::UsbCameraConfig config;
 

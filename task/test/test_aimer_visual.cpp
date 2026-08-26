@@ -31,6 +31,7 @@
 #include "app/auto_aim/tracker_config.hpp"
 #include "tools/img_tools.hpp"
 #include "tools/logger.hpp"
+#include "test_logging.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -245,13 +246,7 @@ namespace
 
 int main(int argc, char** argv)
 {
-	tools::LoggerConfig logger_config;
-	logger_config.level = tools::LogLevel::Debug;
-	logger_config.enable_console = true;
-	logger_config.enable_file = true;
-	logger_config.file_path = std::string(PROJECT_SOURCE_DIR) + "/data/logs/test_aimer_visual.log";
-
-	if(!tools::Logger::instance().init(logger_config))
+	if(!test_logging::init("test_aimer_visual"))
 	{
 		std::printf("[AIMER_VISUAL] [ERROR] logger init failed, file logging disabled\n");
 	}

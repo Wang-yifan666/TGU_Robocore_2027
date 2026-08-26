@@ -13,6 +13,7 @@
 
 #include "app/auto_aim/solver.hpp"
 #include "tools/maths_tools.hpp"
+#include "test_logging.hpp"
 
 namespace aa = app::auto_aim;
 namespace mt = tools::maths_tools;
@@ -396,6 +397,7 @@ namespace
 
 int main()
 {
+	test_logging::init("test_solver");
 	TestRunner runner;
 
 	test_limit_and_angle_tools(runner);

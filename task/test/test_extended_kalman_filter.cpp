@@ -16,6 +16,7 @@
 #include <vector>
 
 #include <Eigen/Dense>
+#include "test_logging.hpp"
 
 namespace
 {
@@ -928,6 +929,7 @@ namespace
 
 int main()
 {
+	test_logging::init("test_extended_kalman_filter");
 	std::printf("=== ExtendedKalmanFilter Module Test Suite ===\n\n");
 
 	TestRunner runner;

@@ -113,7 +113,7 @@ target_link_libraries(test_aimer_visual PRIVATE
 
 target_link_libraries(test_foxglove PRIVATE tools)
 
-target_link_libraries(test_camera PRIVATE ${ARAVIS_LIBRARIES} ${OpenCV_LIBS})
+target_link_libraries(test_camera PRIVATE tools ${ARAVIS_LIBRARIES} ${OpenCV_LIBS})
 
 target_include_directories(test_detector PRIVATE
     ${PROJECT_SOURCE_DIR}
@@ -288,3 +288,14 @@ target_link_libraries(test_usb_camera
     tools
     ${OpenCV_LIBS}
 )
+
+# 统一给缺少 PROJECT_SOURCE_DIR 的测试目标补充定义，供 test_logging.hpp 使用。
+foreach(test_target IN ITEMS
+    test_serial test_foxglove test_camera test_detector test_auto_aim
+    test_solver_config test_extended_kalman_filter test_target test_association
+    test_tracker test_tracker_config test_tracker_spherical_equivalence
+    test_trajectory test_vehicle_prediction test_aimer_config test_aimer
+    test_aimer_pipeline)
+    target_compile_definitions(${test_target} PRIVATE
+        PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+endforeach()

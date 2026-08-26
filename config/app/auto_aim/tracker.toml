@@ -16,9 +16,9 @@ distance_angle_log_gain = 1.0
 armor_yaw_distance_log_gain = 0.005
 
 [lifecycle]
-detecting_confirm_hits = 10   # >= 1
+detecting_confirm_hits = 3   # >= 1  # 原本数值为10，似乎过大
 detecting_max_misses  = 5     # >= 0
-temp_lost_max_misses  = 20    # >= 0
+temp_lost_max_misses  = 50    # >= 0 # 原本数值为20，似乎过小
 max_dt_s              = 0.5   # > 0
 
 [association]

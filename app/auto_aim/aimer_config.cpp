@@ -79,7 +79,7 @@ namespace app::auto_aim
 
 		c.armor_switch_strategy = ArmorSwitchStrategy::SpCompat;
 
-		// PredictiveHysteresis baseline（来自 WMJAimer 公开配置/实现，仅作迁移 baseline）。
+		// PredictiveHysteresis baseline。
 		c.predictive_switch_hysteresis_rad = 0.2617993877991494; // 15°（标准 rad）
 		c.predictive_switch_max_advance_s = 0.2;
 

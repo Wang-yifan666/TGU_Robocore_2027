@@ -3,6 +3,7 @@
 #include "tools/tomlpp.hpp"
 
 #include <cstdio>
+#include "test_logging.hpp"
 
 // 从 config 加载测试参数
 namespace
@@ -315,6 +316,7 @@ bool TestInvalidKeypoints()
 
 int main()
 {
+	test_logging::init("test_armor");
 	load_config();
 
 	printf("=== Armor Module Test Suite ===\n\n");

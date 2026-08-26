@@ -34,7 +34,7 @@ namespace app::auto_aim
 	/**
 	 * @brief 按车辆类别映射初始半径（provisional migration defaults）。
 	 *
-	 * 这些值仅为 migration 初始值，必须在 replay 阶段验证，不作为真理写死。
+	 * 这些值仅为 migration 初始值，必须在 replay 阶段验证。
 	 */
 	struct RadiusProfile
 	{

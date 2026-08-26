@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdio>
 #include <string_view>
+#include "test_logging.hpp"
 
 namespace
 {
@@ -294,6 +295,7 @@ namespace
 
 int main()
 {
+	test_logging::init("test_vehicle_prediction");
 	std::printf("=== Vehicle Prediction Test Suite ===\n\n");
 
 	TestRunner runner;

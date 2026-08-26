@@ -58,6 +58,7 @@
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/videoio.hpp>
+#include "test_logging.hpp"
 
 namespace
 {
@@ -299,6 +300,7 @@ namespace
 
 int main(int argc, char** argv)
 {
+	test_logging::init("test_auto_aim_visual");
 	const std::vector<std::string> normalized_args = normalize_args(argc, argv);
 
 	std::vector<char*> arg_ptrs;

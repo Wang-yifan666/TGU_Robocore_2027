@@ -44,6 +44,7 @@
 #include <Eigen/Geometry>
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
+#include "test_logging.hpp"
 
 namespace
 {
@@ -140,6 +141,7 @@ namespace
 
 int main()
 {
+	test_logging::init("test_auto_aim_pipeline");
 	// ============================================================
 	// 1. 配置路径
 	// ============================================================

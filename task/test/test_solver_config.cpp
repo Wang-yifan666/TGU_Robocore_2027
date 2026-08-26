@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <string>
 #include <string_view>
+#include "test_logging.hpp"
 
 namespace
 {
@@ -258,6 +259,7 @@ r_gimbal_to_imu_body = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
 
 int main()
 {
+	test_logging::init("test_solver_config");
 	std::printf("=== SolverConfig Loader Test Suite ===\n\n");
 
 	TestRunner runner;

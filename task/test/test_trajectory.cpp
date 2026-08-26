@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <limits>
 #include <string_view>
+#include "test_logging.hpp"
 
 namespace
 {
@@ -298,6 +299,7 @@ namespace
 
 int main()
 {
+	test_logging::init("test_trajectory");
 	std::printf("=== Trajectory Test Suite ===\n\n");
 
 	TestRunner runner;
