@@ -23,7 +23,7 @@ add_test(NAME test_shooter COMMAND test_shooter)
 add_test(NAME test_shooter_config COMMAND test_shooter_config)
 add_test(NAME test_board_adapter COMMAND test_board_adapter)
 
-add_executable(sentry sentry.cpp board_adapter.cpp)
+add_executable(sentry sentry.cpp)
 add_executable(read_toml test/read_toml.cpp)
 add_executable(test_serial test/test_serial.cpp)
 add_executable(test_logger test/test_logger.cpp)
@@ -34,7 +34,7 @@ add_executable(test_solver test/test_solver.cpp)
 add_executable(test_usb_camera test/test_usb_camera.cpp)
 add_executable(test_detector test/test_detector.cpp)
 add_executable(test_openvino_inference test/test_openvino_inference.cpp)
-add_executable(test_auto_aim test/test_auto_aim.cpp)
+add_executable(test_auto_aim test/test_auto_aim.cpp board_adapter.cpp)
 add_executable(test_auto_aim_visual test/test_auto_aim_visual.cpp)
 add_executable(test_auto_aim_pipeline test/test_auto_aim_pipeline.cpp)
 add_executable(test_solver_config test/test_solver_config.cpp)
@@ -68,7 +68,6 @@ target_compile_definitions(sentry PRIVATE
 target_link_libraries(test_serial PRIVATE io tools)
 
 target_link_libraries(sentry PRIVATE
-    io
     app
     tools
     ${OpenCV_LIBS}

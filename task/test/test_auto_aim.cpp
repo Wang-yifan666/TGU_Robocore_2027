@@ -18,6 +18,7 @@
 #include "app/auto_aim/auto_aim.hpp"
 #include "app/auto_aim/detector/detector.hpp"
 #include "app/auto_aim/solver.hpp"
+#include "task/board_adapter.hpp"
 
 #include <algorithm>
 #include <array>
@@ -325,6 +326,44 @@ namespace
 
 		return auto_aim::AutoAim(std::move(detector), std::move(solver), std::move(tracker),
 		                         std::move(aimer), std::move(shooter));
+	}
+
+	// ============================================================
+	// Phase 2 §8.3：board adapter full-chain fake integration fixtures
+	// ============================================================
+
+	io::CameraFrame make_board_camera_frame(double timestamp_s)
+	{
+		io::CameraFrame camera;
+		camera.image = make_test_image();
+		camera.timestamp_s = timestamp_s;
+		return camera;
+	}
+
+	task::BoardFeedback make_board_feedback(bool has_quaternion, bool has_bullet_speed,
+	                                        double bullet_speed_mps)
+	{
+		task::BoardFeedback board;
+		board.has_quaternion = has_quaternion;
+		board.q_imu_body_to_world = Eigen::Quaterniond::Identity();
+		board.has_bullet_speed = has_bullet_speed;
+		board.bullet_speed_mps = bullet_speed_mps;
+		return board;
+	}
+
+	task::GimbalCommand run_adapter_pipeline(auto_aim::AutoAim& auto_aim,
+	                                         const io::CameraFrame& camera,
+	                                         const task::BoardFeedback& board,
+	                                         const Eigen::Matrix3d& r_gimbal_to_imu_body)
+	{
+		const auto frame = task::make_frame_context(camera, board, r_gimbal_to_imu_body);
+
+		if(!frame.has_value())
+		{
+			return task::GimbalCommand{}; // 无有效姿态：fail closed
+		}
+
+		return task::make_gimbal_command(auto_aim.process(*frame));
 	}
 
 	// 用假数据填满 debug，验证 empty-frame / error 路径会将其清空。
@@ -1154,6 +1193,105 @@ namespace
 		runner.end();
 	}
 
+	// ============================================================
+	// Phase 2 §8.3：board adapter full-chain fake integration tests
+	// ============================================================
+
+	void test_adapter_missing_pose(TestRunner& runner)
+	{
+		runner.begin("adapter: missing pose -> fail closed");
+
+		std::vector<std::vector<auto_aim::RawDetection>> frames;
+		frames.push_back({make_valid_blue_three(kNearKeypoints)});
+		auto auto_aim = build_shooter_auto_aim(std::move(frames));
+
+		const auto camera = make_board_camera_frame(1.0);
+		const auto board = make_board_feedback(false, true, 23.0);
+
+		const auto command =
+		    run_adapter_pipeline(auto_aim, camera, board, Eigen::Matrix3d::Identity());
+		runner.expect(!command.control, "no pose -> control false");
+		runner.expect(!command.fire, "no pose -> fire false");
+
+		runner.end();
+	}
+
+	void test_adapter_valid_command(TestRunner& runner)
+	{
+		runner.begin("adapter: valid feedback + target -> control true");
+
+		std::vector<std::vector<auto_aim::RawDetection>> frames;
+		frames.push_back({make_valid_blue_three(kNearKeypoints)});
+		auto auto_aim = build_shooter_auto_aim(std::move(frames));
+
+		const auto board = make_board_feedback(true, true, 23.0);
+		const auto command = run_adapter_pipeline(auto_aim, make_board_camera_frame(1.0), board,
+		                                          Eigen::Matrix3d::Identity());
+		runner.expect(command.control, "has aim -> control true");
+		runner.expect(!command.fire, "first frame -> fire false");
+
+		runner.end();
+	}
+
+	void test_adapter_no_target(TestRunner& runner)
+	{
+		runner.begin("adapter: no target -> fire false");
+
+		std::vector<std::vector<auto_aim::RawDetection>> frames;
+		frames.push_back({});
+		auto auto_aim = build_shooter_auto_aim(std::move(frames));
+
+		const auto board = make_board_feedback(true, true, 23.0);
+		const auto command = run_adapter_pipeline(auto_aim, make_board_camera_frame(1.0), board,
+		                                          Eigen::Matrix3d::Identity());
+		runner.expect(!command.control, "no target -> control false");
+		runner.expect(!command.fire, "no target -> fire false");
+
+		runner.end();
+	}
+
+	void test_adapter_aimer_invalid(TestRunner& runner)
+	{
+		runner.begin("adapter: Aimer invalid -> fire false");
+
+		auto aimer_config = auto_aim::make_default_aimer_config();
+		aimer_config.invalid_bullet_speed_policy = auto_aim::InvalidBulletSpeedPolicy::FailSafe;
+
+		std::vector<std::vector<auto_aim::RawDetection>> frames;
+		frames.push_back({make_valid_blue_three(kNearKeypoints)});
+		auto auto_aim = build_shooter_auto_aim(std::move(frames), aimer_config);
+
+		const auto board = make_board_feedback(true, true, std::numeric_limits<double>::quiet_NaN());
+		const auto command = run_adapter_pipeline(auto_aim, make_board_camera_frame(1.0), board,
+		                                          Eigen::Matrix3d::Identity());
+		runner.expect(!command.control, "invalid bullet -> control false");
+		runner.expect(!command.fire, "invalid bullet -> fire false");
+
+		runner.end();
+	}
+
+	void test_adapter_templost(TestRunner& runner)
+	{
+		runner.begin("adapter: TempLost -> fire false");
+
+		std::vector<std::vector<auto_aim::RawDetection>> frames;
+		frames.push_back({make_valid_blue_three(kNearKeypoints)});
+		frames.push_back({}); // 一次 miss -> TempLost
+		auto auto_aim = build_shooter_auto_aim(std::move(frames));
+
+		const auto board = make_board_feedback(true, true, 23.0);
+
+		const auto cmd1 = run_adapter_pipeline(auto_aim, make_board_camera_frame(1.0), board,
+		                                      Eigen::Matrix3d::Identity());
+		runner.expect(cmd1.control, "frame1 tracking -> control true");
+
+		const auto cmd2 = run_adapter_pipeline(auto_aim, make_board_camera_frame(1.1), board,
+		                                      Eigen::Matrix3d::Identity());
+		runner.expect(!cmd2.fire, "TempLost -> fire false");
+
+		runner.end();
+	}
+
 } // namespace
 
 int main()
@@ -1182,6 +1320,11 @@ int main()
 	test_missing_gimbal_facade(runner);
 	test_facade_reset_clears_shooter(runner);
 	test_tracking_invalid_resets_shooter(runner);
+	test_adapter_missing_pose(runner);
+	test_adapter_valid_command(runner);
+	test_adapter_no_target(runner);
+	test_adapter_aimer_invalid(runner);
+	test_adapter_templost(runner);
 
 	runner.print_summary();
 

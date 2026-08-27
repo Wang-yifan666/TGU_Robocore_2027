@@ -32,7 +32,7 @@ namespace io
 	struct CameraFrame
 	{
 		cv::Mat image;
-		double timestamp_s = 0.0;
+		double timestamp_s = 0.0; ///< host read timestamp（非硬件曝光/捕获时刻）
 		std::uint64_t frame_id = 0;
 	};
 

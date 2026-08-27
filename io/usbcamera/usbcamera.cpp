@@ -101,7 +101,7 @@ namespace io
 		}
 
 		frame.image = image;
-		frame.timestamp_s = now_seconds();
+		frame.timestamp_s = now_seconds(); // host read timestamp（非硬件曝光/捕获时刻）
 		frame.frame_id = frame_id_++;
 
 		return true;

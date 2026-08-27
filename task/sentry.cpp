@@ -16,9 +16,6 @@
 #include "app/auto_aim/auto_aim.hpp"
 #include "app/auto_aim/shooter_config.hpp"
 #include "app/auto_aim/tracker_config.hpp"
-#include "io/usbcamera/usbcamera.hpp"
-#include "io/usbcamera/usbcamera_config.hpp"
-#include "task/board_adapter.hpp"
 #include "tools/logger.hpp"
 
 namespace
@@ -56,6 +53,14 @@ namespace
 		return config;
 	}
 
+	bool read_frame_stub(cv::Mat& image)
+	{
+		// TODO:
+		// 后续替换为 io::HikRobotCamera::read(image)
+		image = cv::Mat::zeros(480, 640, CV_8UC3);
+		return true;
+	}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -83,23 +88,6 @@ int main(int argc, char** argv)
 	LOG_INFO(MODULE, "sentry task starting");
 
 	RuntimeConfig runtime_config = load_runtime_config();
-
-	// ---- USB 相机 ----
-	io::UsbCameraConfig usb_camera_config;
-	if(!io::load_usb_camera_config(
-	       std::filesystem::path(std::string(PROJECT_SOURCE_DIR) + "/config/camera.toml"),
-	       usb_camera_config))
-	{
-		LOG_ERROR(MODULE, "failed to load usb camera config");
-		return -1;
-	}
-
-	io::UsbCamera camera(std::move(usb_camera_config));
-	if(!camera.open())
-	{
-		LOG_ERROR(MODULE, "failed to open usb camera");
-		return -1;
-	}
 
 	// 生产入口暂未装配真实 detector / solver 依赖。
 	// 禁止使用 demo-only solver 标定（config/app/auto_aim/solver_demo.toml）。
@@ -154,27 +142,23 @@ int main(int argc, char** argv)
 
 	while(g_running)
 	{
-		io::CameraFrame camera_frame;
-		if(!camera.read(camera_frame))
+		cv::Mat image;
+
+		if(!read_frame_stub(image))
 		{
 			LOG_WARN(MODULE, "failed to read frame");
 			std::this_thread::sleep_for(std::chrono::milliseconds(runtime_config.loop_period_ms));
 			continue;
 		}
 
-		// TODO(io/board): 将下位机收包解析为 task::BoardFeedback。
-		// 未接入板卡驱动前，board_feedback 保持全 has_*=false -> bullet/gimbal 为 NaN，
-		// pipeline 将 fail-safe（fire=false）。禁止填入伪造的 0.0。
-		task::BoardFeedback board_feedback;
+		app::auto_aim::FrameContext frame_context;
+		frame_context.image = image;
+		frame_context.timestamp_s = now_seconds();
 
-		app::auto_aim::FrameContext frame_context = task::make_frame_context(
-		    camera_frame, board_feedback, solver_config.r_gimbal_to_imu_body);
+		// TODO(task/io): 接入 cboard 弹速与云台 yaw 反馈；未接入前保持 NaN，
+		// pipeline 将 fail-safe（fire=false）。禁止填入伪造的 0.0。
 
 		auto result = auto_aim.process(frame_context);
-
-		task::GimbalCommand command = task::make_gimbal_command(result);
-		// TODO(io): 将 command 按下发协议转成 packet 并 serial.send()；
-		// has_aim=false 时 command.control=false、command.fire=false（无 stale）。
 
 		// 只有 Tracking / TempLost 才是 confirmed 控制目标（has_target == true）。
 		// Detecting 阶段即使 tracked_target 存在也只是未确认候选，不得作为控制目标。
