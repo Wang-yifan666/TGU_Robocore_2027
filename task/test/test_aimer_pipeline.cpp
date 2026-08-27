@@ -3,7 +3,7 @@
  * @brief Tracker -> Aimer 链路集成测试（synthetic ArmorObservation）。
  *
  * 验证 TrackedTarget 快照能直接驱动 Aimer，并观察 selected_armor_id /
- * yaw / pitch / fire_allowed / has_armor_switch 传播。
+ * yaw / pitch has_armor_switch 传播。
  */
 
 #include "app/auto_aim/aimer.hpp"
@@ -140,7 +140,6 @@ namespace
 		const auto sol1 = aimer.aim(*tr1.target, 0.0, 23.0);
 		runner.expect(sol1.valid, "aimer valid after init");
 		runner.expect(sol1.selected_armor_id == 0, "no switch -> selected id 0");
-		runner.expect(!sol1.fire_allowed, "fire_allowed false");
 		runner.expect(std::isfinite(sol1.yaw_rad) && std::isfinite(sol1.pitch_rad),
 		              "yaw/pitch finite");
 
@@ -152,7 +151,6 @@ namespace
 		const auto sol2 = aimer.aim(*tr2.target, 0.1, 23.0);
 		runner.expect(sol2.valid, "aimer valid after switch");
 		runner.expect(sol2.selected_armor_id.has_value(), "selected armor present after switch");
-		runner.expect(!sol2.fire_allowed, "fire_allowed false after switch");
 
 		runner.end();
 	}

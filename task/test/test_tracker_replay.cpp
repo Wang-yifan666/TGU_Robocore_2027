@@ -481,7 +481,9 @@ int main()
 	app::auto_aim::Detector detector(detector_config, std::move(inference));
 	app::auto_aim::Solver solver(solver_config);
 	app::auto_aim::Tracker tracker(tracker_config);
-	app::auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver), std::move(tracker));
+	app::auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver), std::move(tracker),
+	                                app::auto_aim::Aimer(app::auto_aim::make_default_aimer_config()),
+	                                app::auto_aim::Shooter(app::auto_aim::make_default_shooter_config()));
 
 	if(!auto_aim.is_ready())
 	{

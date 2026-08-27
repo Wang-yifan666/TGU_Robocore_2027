@@ -1,0 +1,13 @@
+# Shooter 配置（迁移自 sp_vision_25 shooter YAML + 代码硬编码常量）。
+# 单位约定：角度 rad、距离 m。
+# 所有字段生产 required，缺失即加载失败。
+
+[shooter]
+
+# 生产显式开启；ShooterConfig::auto_fire 的程序化默认值为 false（fail-safe）
+auto_fire = true
+
+# 容差保留 SP25 的 /57.3 近似，与 aimer.toml 的 coming_angle 等字段数值口径一致
+near_tolerance_rad = 0.08726003490401396  # 5 / 57.3（SP25 first_tolerance 5°）
+far_tolerance_rad  = 0.034904013961605584 # 2 / 57.3（SP25 second_tolerance 2°）
+distance_threshold_m = 3.0                # SP25 judge_distance 3 m

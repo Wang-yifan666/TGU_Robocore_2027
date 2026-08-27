@@ -16,7 +16,7 @@
  * - 车辆速度向量（洋红箭头）
  * - 各预测 armor hypothesis（品红圆点 + armor_id；选中的装甲板高亮为红色粗圈）
  * - Aimer 瞄准点（黄色十字 + 圆圈，来自 debug.aim_point_in_world）
- * - Aimer 状态文本：status / yaw / pitch / selected_armor_id / fire_allowed /
+ * - Aimer 状态文本：status / yaw / pitch / selected_armor_id
  *   flight_time / converged / refinement_iterations
  *
  * 无 ground truth：只做可视化 + 数值健康诊断，不声称 absolute accuracy。
@@ -374,7 +374,9 @@ int main(int argc, char** argv)
 	app::auto_aim::Detector detector(detector_config, std::move(inference));
 	app::auto_aim::Solver solver(solver_config);
 	app::auto_aim::Tracker tracker(tracker_config);
-	app::auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver), std::move(tracker));
+	app::auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver), std::move(tracker),
+	                                app::auto_aim::Aimer(app::auto_aim::make_default_aimer_config()),
+	                                app::auto_aim::Shooter(app::auto_aim::make_default_shooter_config()));
 	app::auto_aim::Aimer aimer(aimer_config);
 
 	if(!auto_aim.is_ready())
@@ -493,14 +495,14 @@ int main(int argc, char** argv)
 				    aimer.aim(tracked, context.timestamp_s, bullet_speed_mps, &aimer_debug);
 
 				LOG_DEBUG("AIMER_VISUAL",
-				          "frame {}: status={} yaw={:.3f} pitch={:.3f} selected={} fire={} "
+				          "frame {}: status={} yaw={:.3f} pitch={:.3f} selected={} "
 				          "aim=({:.3f},{:.3f},{:.3f}) flight={:.3f}s",
 				          frame_index + 1, aim_status_name(solution.status), solution.yaw_rad,
 				          solution.pitch_rad,
 				          solution.selected_armor_id.has_value()
 				              ? std::to_string(*solution.selected_armor_id)
 				              : std::string("none"),
-				          solution.fire_allowed ? 1 : 0, aimer_debug.aim_point_in_world.x(),
+				          aimer_debug.aim_point_in_world.x(),
 				          aimer_debug.aim_point_in_world.y(), aimer_debug.aim_point_in_world.z(),
 				          aimer_debug.flight_time_s);
 
@@ -565,11 +567,10 @@ int main(int argc, char** argv)
 
 				char select_line[128];
 				std::snprintf(select_line, sizeof(select_line),
-				              "selected_armor=%s  fire_allowed=%d",
+				              "selected_armor=%s",
 				              solution.selected_armor_id.has_value()
 				                  ? std::to_string(*solution.selected_armor_id).c_str()
-				                  : "none",
-				              solution.fire_allowed ? 1 : 0);
+				                  : "none");
 				cv::putText(canvas, select_line, cv::Point(origin.x, origin.y + 22),
 				            cv::FONT_HERSHEY_SIMPLEX, 0.6, kTextColor, 1);
 

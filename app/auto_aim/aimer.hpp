@@ -132,9 +132,6 @@ namespace app::auto_aim
 		double pitch_rad = 0.0;
 
 		std::optional<int> selected_armor_id;
-
-		/// 本阶段恒为 false；动态 shooting window 实现后才可能为 true。
-		bool fire_allowed = false;
 	};
 
 	/**

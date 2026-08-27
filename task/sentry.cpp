@@ -12,7 +12,9 @@
 
 #include <opencv2/core.hpp>
 
+#include "app/auto_aim/aimer_config.hpp"
 #include "app/auto_aim/auto_aim.hpp"
+#include "app/auto_aim/shooter_config.hpp"
 #include "app/auto_aim/tracker_config.hpp"
 #include "tools/logger.hpp"
 
@@ -98,6 +100,8 @@ int main(int argc, char** argv)
 	app::auto_aim::Solver solver(solver_config);
 
 	app::auto_aim::TrackerConfig tracker_config;
+	app::auto_aim::AimerConfig aimer_config;
+	app::auto_aim::ShooterConfig shooter_config;
 
 	if(!app::auto_aim::load_tracker_config(
 	       std::string(PROJECT_SOURCE_DIR) + "/config/app/auto_aim/tracker.toml",
@@ -107,8 +111,27 @@ int main(int argc, char** argv)
 		return -1;
 	}
 
+	if(!app::auto_aim::load_aimer_config(
+	       std::string(PROJECT_SOURCE_DIR) + "/config/app/auto_aim/aimer.toml",
+	       aimer_config))
+	{
+		LOG_ERROR(MODULE, "failed to load aimer config");
+		return -1;
+	}
+
+	if(!app::auto_aim::load_shooter_config(
+	       std::string(PROJECT_SOURCE_DIR) + "/config/app/auto_aim/shooter.toml",
+	       shooter_config))
+	{
+		LOG_ERROR(MODULE, "failed to load shooter config");
+		return -1;
+	}
+
 	app::auto_aim::Tracker tracker(tracker_config);
-	app::auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver), std::move(tracker));
+	app::auto_aim::Aimer aimer(aimer_config);
+	app::auto_aim::Shooter shooter(shooter_config);
+	app::auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver), std::move(tracker),
+	                                std::move(aimer), std::move(shooter));
 
 	// 依赖未就绪时直接退出，避免每 10ms 空转刷 ERROR。
 	if(!auto_aim.is_ready())
@@ -131,6 +154,9 @@ int main(int argc, char** argv)
 		app::auto_aim::FrameContext frame_context;
 		frame_context.image = image;
 		frame_context.timestamp_s = now_seconds();
+
+		// TODO(task/io): 接入 cboard 弹速与云台 yaw 反馈；未接入前保持 NaN，
+		// pipeline 将 fail-safe（fire=false）。禁止填入伪造的 0.0。
 
 		auto result = auto_aim.process(frame_context);
 

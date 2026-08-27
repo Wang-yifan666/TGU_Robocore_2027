@@ -23,6 +23,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <memory>
 #include <string_view>
 #include <utility>
@@ -276,7 +277,54 @@ namespace
 
 		auto_aim::Tracker tracker(auto_aim::make_default_tracker_config());
 
-		return auto_aim::AutoAim(std::move(detector), std::move(solver), std::move(tracker));
+		return auto_aim::AutoAim(std::move(detector), std::move(solver), std::move(tracker),
+		                         auto_aim::Aimer(auto_aim::make_default_aimer_config()),
+		                         auto_aim::Shooter(auto_aim::make_default_shooter_config()));
+	}
+
+	// ============================================================
+	// Aimer/Shooter facade 集成测试 fixture
+	// ============================================================
+
+	auto_aim::TrackerConfig make_tracking_tracker_config()
+	{
+		auto_aim::TrackerConfig config = auto_aim::make_default_tracker_config();
+		config.detecting_confirm_hits = 1; // init 直接进入 Tracking。
+		return config;
+	}
+
+	auto_aim::ShooterConfig make_test_shooter_config()
+	{
+		auto_aim::ShooterConfig config = auto_aim::make_default_shooter_config();
+		config.auto_fire = true;
+		return config;
+	}
+
+	auto_aim::FrameContext make_shooter_frame(double bullet_speed_mps, double gimbal_yaw_rad,
+	                                           double timestamp_s)
+	{
+		auto_aim::FrameContext frame;
+		frame.image = make_test_image();
+		frame.timestamp_s = timestamp_s;
+		frame.bullet_speed_mps = bullet_speed_mps;
+		frame.gimbal_yaw_rad = gimbal_yaw_rad;
+		return frame;
+	}
+
+	auto_aim::AutoAim build_shooter_auto_aim(
+	    std::vector<std::vector<auto_aim::RawDetection>> frames,
+	    auto_aim::AimerConfig aimer_config = auto_aim::make_default_aimer_config())
+	{
+		auto fake = std::make_unique<QueueFakeInference>(std::move(frames));
+
+		auto_aim::Detector detector(make_default_config(), std::move(fake));
+		auto_aim::Solver solver(make_valid_solver_config());
+		auto_aim::Tracker tracker(make_tracking_tracker_config());
+		auto_aim::Aimer aimer(aimer_config);
+		auto_aim::Shooter shooter(make_test_shooter_config());
+
+		return auto_aim::AutoAim(std::move(detector), std::move(solver), std::move(tracker),
+		                         std::move(aimer), std::move(shooter));
 	}
 
 	// 用假数据填满 debug，验证 empty-frame / error 路径会将其清空。
@@ -890,7 +938,9 @@ namespace
 		auto_aim::Detector detector(make_default_config(), std::move(fake));
 		auto_aim::Solver solver(make_valid_solver_config());
 		auto_aim::Tracker tracker(auto_aim::make_default_tracker_config());
-		auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver), std::move(tracker));
+		auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver), std::move(tracker),
+		                             auto_aim::Aimer(auto_aim::make_default_aimer_config()),
+		                             auto_aim::Shooter(auto_aim::make_default_shooter_config()));
 
 		auto_aim::FrameContext frame;
 		frame.image = make_test_image();
@@ -938,6 +988,172 @@ namespace
 		runner.end();
 	}
 
+	void test_aimer_shooter_success(TestRunner& runner)
+	{
+		runner.begin("Aimer + Shooter success");
+
+		std::vector<std::vector<auto_aim::RawDetection>> frames;
+		frames.push_back({make_valid_blue_three(kNearKeypoints)});
+		frames.push_back({make_valid_blue_three(kNearKeypoints)});
+
+		auto auto_aim = build_shooter_auto_aim(std::move(frames));
+
+		const auto r1 = auto_aim.process(make_shooter_frame(23.0, 0.0, 1.0));
+		runner.expect(r1.has_target, "frame1 has target");
+		runner.expect(r1.has_aim, "frame1 has aim");
+		runner.expect(!r1.fire, "frame1 first frame no fire");
+
+		const auto r2 = auto_aim.process(make_shooter_frame(23.0, r1.yaw, 1.1));
+		runner.expect(r2.has_aim, "frame2 has aim");
+		runner.expect(r2.fire, "frame2 fire true");
+
+		runner.end();
+	}
+
+	void test_aimer_invalid(TestRunner& runner)
+	{
+		runner.begin("Aimer invalid -> no aim, no fire");
+
+		auto aimer_config = auto_aim::make_default_aimer_config();
+		aimer_config.invalid_bullet_speed_policy = auto_aim::InvalidBulletSpeedPolicy::FailSafe;
+
+		std::vector<std::vector<auto_aim::RawDetection>> frames;
+		frames.push_back({make_valid_blue_three(kNearKeypoints)});
+
+		auto auto_aim = build_shooter_auto_aim(std::move(frames), aimer_config);
+
+		const auto r = auto_aim.process(
+		    make_shooter_frame(std::numeric_limits<double>::quiet_NaN(), 0.0, 1.0));
+		runner.expect(r.has_target, "has target");
+		runner.expect(!r.has_aim, "invalid bullet -> no aim");
+		runner.expect(!r.fire, "no fire");
+
+		runner.end();
+	}
+
+	void test_shooter_false(TestRunner& runner)
+	{
+		runner.begin("Shooter false but has aim");
+
+		std::vector<std::vector<auto_aim::RawDetection>> frames;
+		frames.push_back({make_valid_blue_three(kNearKeypoints)});
+		frames.push_back({make_valid_blue_three(kNearKeypoints)});
+
+		auto auto_aim = build_shooter_auto_aim(std::move(frames));
+
+		const auto r1 = auto_aim.process(make_shooter_frame(23.0, 0.0, 1.0));
+		runner.expect(r1.has_aim, "frame1 has aim");
+
+		const auto r2 = auto_aim.process(make_shooter_frame(23.0, r1.yaw + 1.0, 1.1));
+		runner.expect(r2.has_aim, "frame2 has aim");
+		runner.expect(!r2.fire, "gimbal not settled -> no fire");
+
+		runner.end();
+	}
+
+	void test_templost_forbids_fire(TestRunner& runner)
+	{
+		runner.begin("TempLost forbids fire");
+
+		std::vector<std::vector<auto_aim::RawDetection>> frames;
+		frames.push_back({make_valid_blue_three(kNearKeypoints)});
+		frames.push_back({});
+
+		auto auto_aim = build_shooter_auto_aim(std::move(frames));
+
+		const auto r1 = auto_aim.process(make_shooter_frame(23.0, 0.0, 1.0));
+		runner.expect(r1.has_target, "frame1 tracking");
+
+		const auto r2 = auto_aim.process(make_shooter_frame(23.0, 0.0, 1.1));
+		runner.expect(r2.has_target, "TempLost still has target");
+		runner.expect(!r2.fire, "TempLost forbids fire");
+
+		runner.end();
+	}
+
+	void test_missing_gimbal_facade(TestRunner& runner)
+	{
+		runner.begin("missing gimbal feedback facade");
+
+		std::vector<std::vector<auto_aim::RawDetection>> frames;
+		frames.push_back({make_valid_blue_three(kNearKeypoints)});
+		frames.push_back({make_valid_blue_three(kNearKeypoints)});
+
+		auto auto_aim = build_shooter_auto_aim(std::move(frames));
+
+		const double nan = std::numeric_limits<double>::quiet_NaN();
+		const auto r1 = auto_aim.process(make_shooter_frame(23.0, nan, 1.0));
+		runner.expect(r1.has_aim, "frame1 has aim");
+
+		const auto r2 = auto_aim.process(make_shooter_frame(23.0, nan, 1.1));
+		runner.expect(r2.has_aim, "frame2 has aim");
+		runner.expect(!r2.fire, "missing gimbal -> no fire");
+
+		runner.end();
+	}
+
+	void test_facade_reset_clears_shooter(TestRunner& runner)
+	{
+		runner.begin("facade reset clears shooter history");
+
+		std::vector<std::vector<auto_aim::RawDetection>> frames;
+		frames.push_back({make_valid_blue_three(kNearKeypoints)});
+		frames.push_back({make_valid_blue_three(kNearKeypoints)});
+		frames.push_back({make_valid_blue_three(kNearKeypoints)});
+
+		auto auto_aim = build_shooter_auto_aim(std::move(frames));
+
+		const auto r1 = auto_aim.process(make_shooter_frame(23.0, 0.0, 1.0));
+		runner.expect(r1.has_aim, "frame1 has aim");
+
+		const auto r2 = auto_aim.process(make_shooter_frame(23.0, r1.yaw, 1.1));
+		runner.expect(r2.fire, "frame2 fire true");
+
+		auto_aim.reset();
+
+		const auto r3 = auto_aim.process(make_shooter_frame(23.0, r2.yaw, 1.2));
+		runner.expect(r3.has_aim, "frame3 has aim");
+		runner.expect(!r3.fire, "after reset first frame no fire");
+
+		runner.end();
+	}
+
+	void test_tracking_invalid_resets_shooter(TestRunner& runner)
+	{
+		runner.begin("Tracking Aimer invalid resets Shooter");
+
+		auto aimer_config = auto_aim::make_default_aimer_config();
+		aimer_config.invalid_bullet_speed_policy = auto_aim::InvalidBulletSpeedPolicy::FailSafe;
+
+		std::vector<std::vector<auto_aim::RawDetection>> frames;
+		frames.push_back({make_valid_blue_three(kNearKeypoints)});
+		frames.push_back({make_valid_blue_three(kNearKeypoints)});
+		frames.push_back({make_valid_blue_three(kNearKeypoints)});
+		frames.push_back({make_valid_blue_three(kNearKeypoints)});
+
+		auto auto_aim = build_shooter_auto_aim(std::move(frames), aimer_config);
+
+		const double nan = std::numeric_limits<double>::quiet_NaN();
+
+		const auto r1 = auto_aim.process(make_shooter_frame(23.0, 0.0, 1.0));
+		runner.expect(r1.has_aim, "frame1 has aim");
+		runner.expect(!r1.fire, "frame1 first frame no fire");
+
+		const auto r2 = auto_aim.process(make_shooter_frame(nan, r1.yaw, 1.1));
+		runner.expect(!r2.has_aim, "frame2 invalid bullet no aim");
+		runner.expect(!r2.fire, "frame2 no fire");
+
+		const auto r3 = auto_aim.process(make_shooter_frame(23.0, r1.yaw, 1.2));
+		runner.expect(r3.has_aim, "frame3 has aim");
+		runner.expect(!r3.fire, "frame3 re-establish no fire");
+
+		const auto r4 = auto_aim.process(make_shooter_frame(23.0, r3.yaw, 1.3));
+		runner.expect(r4.has_aim, "frame4 has aim");
+		runner.expect(r4.fire, "frame4 fire true");
+
+		runner.end();
+	}
+
 } // namespace
 
 int main()
@@ -959,6 +1175,13 @@ int main()
 	test_multiple_observations(runner);
 	test_debug_lifecycle_early_return(runner);
 	test_debug_lifecycle_no_residue(runner);
+	test_aimer_shooter_success(runner);
+	test_aimer_invalid(runner);
+	test_shooter_false(runner);
+	test_templost_forbids_fire(runner);
+	test_missing_gimbal_facade(runner);
+	test_facade_reset_clears_shooter(runner);
+	test_tracking_invalid_resets_shooter(runner);
 
 	runner.print_summary();
 

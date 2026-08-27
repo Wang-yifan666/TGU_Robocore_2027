@@ -15,14 +15,17 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <vector>
 
 #include <Eigen/Geometry>
 #include <opencv2/core.hpp>
 
+#include "app/auto_aim/aimer.hpp"
 #include "app/auto_aim/armor.hpp"
 #include "app/auto_aim/detector/detector.hpp"
+#include "app/auto_aim/shooter.hpp"
 #include "app/auto_aim/solver.hpp"
 #include "app/auto_aim/tracker.hpp"
 #include "app/auto_aim/tracker_types.hpp"
@@ -42,6 +45,12 @@ namespace app::auto_aim
 		// 云台 body -> 世界 四元数。
 		// 无同步 IMU 数据时必须保持 Identity（仅离线验证）。
 		Eigen::Quaterniond q_imu_body_to_world = Eigen::Quaterniond::Identity();
+
+		// 当前弹速观测（m/s）。未提供时保持 NaN，由 task/io 注入，禁止伪造 0.0。
+		double bullet_speed_mps = std::numeric_limits<double>::quiet_NaN();
+
+		// 当前实测云台 yaw（与 Aimer 输出 yaw 同坐标系）。未提供时保持 NaN。
+		double gimbal_yaw_rad = std::numeric_limits<double>::quiet_NaN();
 	};
 
 	/**
@@ -125,10 +134,20 @@ namespace app::auto_aim
 		std::optional<TrackedTarget> tracked_target;
 
 		/**
-		 * @brief raw geometric line-of-sight observation，NOT final ballistic compensated command。
+		 * @brief Aimer 是否成功产生有效 ballistic aiming solution。
+		 */
+		bool has_aim = false;
+
+		/**
+		 * @brief Shooter 当前是否允许开火。
+		 */
+		bool fire = false;
+
+		/**
+		 * @brief Aimer 最终 ballistic compensated 目标角（仅 has_aim 时有效）。
 		 *
-		 * 本阶段不定义云台控制命令语义，因此 yaw / pitch 保持默认 0；
-		 * 主要结果见 target.xyz_in_gimbal / target.xyz_in_world / target.ypr / target.ypd。
+		 * 不是 Detector/Solver 阶段的 raw LOS；has_aim 为 false 时保持默认 0，
+		 * 调用方必须以 has_aim 判断有效性，不得用 0 值判断。
 		 */
 		double yaw = 0.0;
 		double pitch = 0.0;
@@ -193,12 +212,12 @@ namespace app::auto_aim
 	{
 	public:
 		/**
-		 * @brief 构造 AutoAim facade：持有 Detector / Solver / Tracker。
+		 * @brief 构造 AutoAim facade：持有 Detector / Solver / Tracker / Aimer / Shooter。
 		 *
-		 * AutoAim 不读取 TOML、不构造模型/硬件依赖；Tracker 已由
+		 * AutoAim 不读取 TOML、不构造模型/硬件依赖；各依赖已由
 		 * task/composition 层根据 config 构造后注入。
 		 */
-		AutoAim(Detector detector, Solver solver, Tracker tracker);
+		AutoAim(Detector detector, Solver solver, Tracker tracker, Aimer aimer, Shooter shooter);
 
 		/**
 		 * @brief 处理单帧输入。
@@ -209,7 +228,7 @@ namespace app::auto_aim
 		AimResult process(const FrameContext& frame, AutoAimDebugData* debug = nullptr);
 
 		/**
-		 * @brief 重置：frame_count 归零，并 reset Tracker 生命周期。
+		 * @brief 重置：frame_count 归零，并 reset Tracker / Aimer / Shooter 生命周期。
 		 */
 		void reset();
 
@@ -219,8 +238,12 @@ namespace app::auto_aim
 		Detector detector_;
 		Solver solver_;
 		Tracker tracker_;
+		Aimer aimer_;
+		Shooter shooter_;
 
 		std::uint64_t frame_count_ = 0;
+
+		std::optional<std::uint64_t> last_target_token_;
 	};
 
 } // namespace app::auto_aim

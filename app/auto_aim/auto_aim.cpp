@@ -108,8 +108,10 @@ namespace app::auto_aim
 
 	} // namespace
 
-	AutoAim::AutoAim(Detector detector, Solver solver, Tracker tracker):
-	detector_(std::move(detector)), solver_(std::move(solver)), tracker_(std::move(tracker))
+	AutoAim::AutoAim(Detector detector, Solver solver, Tracker tracker, Aimer aimer,
+	                 Shooter shooter):
+	detector_(std::move(detector)), solver_(std::move(solver)), tracker_(std::move(tracker)),
+	aimer_(std::move(aimer)), shooter_(std::move(shooter))
 	{
 	}
 
@@ -117,6 +119,9 @@ namespace app::auto_aim
 	{
 		frame_count_ = 0;
 		tracker_.reset();
+		aimer_.reset();
+		shooter_.reset();
+		last_target_token_.reset();
 		LOG_INFO(kLogModule, "auto aim reset");
 	}
 
@@ -261,6 +266,57 @@ namespace app::auto_aim
 		{
 			result.state = AimState::NoTarget;
 			result.has_target = false;
+		}
+
+		// ---- 6. 目标身份作用域与射击历史 ----
+		if(!result.has_target)
+		{
+			// Lost / Detecting：无确认目标，清空射击历史与目标身份。
+			shooter_.reset();
+			last_target_token_.reset();
+		}
+		else if(result.tracked_target.has_value())
+		{
+			const TrackedTarget& tracked = *result.tracked_target;
+
+			if(last_target_token_ != tracked.target_token)
+			{
+				shooter_.reset();
+				last_target_token_ = tracked.target_token;
+			}
+
+			// ---- 7. Aimer：Tracking / TempLost 都可产生瞄准解 ----
+			const AimingSolution aiming =
+			    aimer_.aim(tracked, frame.timestamp_s, frame.bullet_speed_mps);
+
+			if(aiming.valid)
+			{
+				result.has_aim = true;
+				result.yaw = aiming.yaw_rad;
+				result.pitch = aiming.pitch_rad;
+
+				// ---- 8. Shooter：仅 Tracking 允许开火 ----
+				if(tracked.state == TrackerState::Tracking)
+				{
+					const double target_distance_m =
+					    std::hypot(tracked.center_in_world.x(), tracked.center_in_world.y());
+					result.fire = shooter_.shoot(aiming, target_distance_m,
+					                              frame.gimbal_yaw_rad);
+				}
+				else
+				{
+					// TempLost：有 aim 但禁止开火；清空射击历史，回 Tracking 时重新建立。
+					shooter_.reset();
+					result.fire = false;
+				}
+			}
+			else
+			{
+				// Aimer invalid：本帧无 aim、禁止开火，并 reset Shooter，
+				// 使恢复后的第一帧重新建立历史并禁止开火。
+				shooter_.reset();
+				result.fire = false;
+			}
 		}
 
 		return result;

@@ -179,7 +179,6 @@ namespace
 		runner.expect(near(rnan.yaw_rad, r23.yaw_rad), "NaN fallback yaw == 23 yaw");
 		runner.expect(near(rinf.yaw_rad, r23.yaw_rad), "Inf fallback yaw == 23 yaw");
 
-		runner.expect(!r23.fire_allowed, "fire_allowed stays false");
 
 		runner.end();
 	}
@@ -199,7 +198,6 @@ namespace
 
 		runner.expect(!r.valid, "fail_safe invalid bullet -> not valid");
 		runner.expect(r.status == auto_aim::AimStatus::InvalidBulletSpeed, "status InvalidBulletSpeed");
-		runner.expect(!r.fire_allowed, "fire_allowed false");
 
 		runner.end();
 	}

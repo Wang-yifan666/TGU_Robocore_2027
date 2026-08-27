@@ -499,7 +499,6 @@ namespace app::auto_aim
 		    std::atan2(current.aim_point.y(), current.aim_point.x()) + config_.yaw_offset_rad;
 		solution.pitch_rad = -(current.pitch + config_.pitch_offset_rad);
 		solution.selected_armor_id = current.selected_armor_id;
-		solution.fire_allowed = false; // 本阶段恒 false。
 
 		// ---- transaction commit：仅成功时提交 predictive 状态 ----
 		predictive_selected_armor_id_ = current.selected_armor_id;

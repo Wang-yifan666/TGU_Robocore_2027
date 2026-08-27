@@ -7,6 +7,8 @@ add_library(app STATIC
     auto_aim/auto_aim.cpp
     auto_aim/solver.cpp
     auto_aim/solver_config.cpp
+    auto_aim/shooter.cpp
+    auto_aim/shooter_config.cpp
     auto_aim/target.cpp
     auto_aim/tracker.cpp
     auto_aim/tracker_config.cpp
