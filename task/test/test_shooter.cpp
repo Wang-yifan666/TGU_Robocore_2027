@@ -268,11 +268,17 @@ namespace
 		runner.begin("missing gimbal feedback (NaN sentinel)");
 
 		auto_aim::Shooter shooter(make_config(true));
-		const auto aiming = make_aiming(0.0);
-		shooter.shoot(aiming, 1.0, 0.0); // establish history
+		const auto aiming = make_aiming(0.5);
+		const double nan = std::numeric_limits<double>::quiet_NaN();
 
-		runner.expect(!shooter.shoot(aiming, 1.0, std::numeric_limits<double>::quiet_NaN()),
-		              "gimbal NaN -> false");
+		shooter.shoot(aiming, 1.0, 0.5); // establish history
+		runner.expect(shooter.shoot(aiming, 1.0, 0.5), "fire true before loss");
+
+		runner.expect(!shooter.shoot(aiming, 1.0, nan), "gimbal NaN -> false");
+
+		// 反馈恢复：第一帧必须重新建立历史，仍禁止开火。
+		runner.expect(!shooter.shoot(aiming, 1.0, 0.5), "first frame after recovery no fire");
+		runner.expect(shooter.shoot(aiming, 1.0, 0.5), "second frame after recovery fire true");
 
 		runner.end();
 	}

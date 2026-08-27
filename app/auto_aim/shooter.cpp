@@ -83,9 +83,11 @@ namespace app::auto_aim
 		}
 
 		// 3) gimbal NaN 是 missing-feedback sentinel（未接云台反馈），使用 DEBUG。
+		// 丢失时清空历史，使反馈恢复后的第一帧重新建立历史并禁止开火。
 		if(!std::isfinite(gimbal_yaw_rad))
 		{
-			LOG_DEBUG(kLogModule, "gimbal feedback missing (NaN), no fire");
+			previous_aiming_yaw_rad_.reset();
+			LOG_DEBUG(kLogModule, "gimbal feedback missing (NaN), reset history, no fire");
 			return false;
 		}
 
