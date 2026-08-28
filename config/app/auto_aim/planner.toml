@@ -1,0 +1,16 @@
+# Planner（TinyMPC 云台轨迹规划）配置。
+# 仅含 MPC 自身参数；弹速 / delay / offset / fire threshold 属于 Aimer / Shooter。
+# legacy baseline: sp_vision_25/configs/standard4.yaml（rho=1.0、max_iter=10 来自 planner.cpp）。
+
+[planner]
+max_yaw_acceleration_rad_s2 = 50.0
+max_pitch_acceleration_rad_s2 = 100.0
+
+q_yaw = [9e6, 0.0]
+r_yaw = 1.0
+
+q_pitch = [9e6, 0.0]
+r_pitch = 1.0
+
+rho = 1.0
+max_iter = 10

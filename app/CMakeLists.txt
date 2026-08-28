@@ -3,6 +3,8 @@ add_library(app STATIC
     auto_aim/armor_config.cpp
     auto_aim/aimer.cpp
     auto_aim/aimer_config.cpp
+    auto_aim/planner.cpp
+    auto_aim/planner_config.cpp
     auto_aim/association.cpp
     auto_aim/auto_aim.cpp
     auto_aim/solver.cpp

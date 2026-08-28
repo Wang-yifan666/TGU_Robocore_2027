@@ -16,7 +16,7 @@ namespace app::auto_aim
 		constexpr double kTwoPi = 2.0 * kPi;
 	} // namespace
 
-	PredictedVehicle predict_vehicle(const TrackedTarget& target, double dt_s)
+	PredictedVehicle extrapolate_vehicle(const TrackedTarget& target, double dt_s)
 	{
 		PredictedVehicle vehicle;
 
@@ -28,6 +28,12 @@ namespace app::auto_aim
 		vehicle.armor_count = static_cast<int>(target.predicted_armors.size());
 
 		return vehicle;
+	}
+
+	PredictedVehicle predict_vehicle(const TrackedTarget& target, double dt_s)
+	{
+		// 公开契约：dt_s >= 0。正向前推委托给有符号底层原语，二者公式保持一致。
+		return extrapolate_vehicle(target, dt_s);
 	}
 
 	std::vector<ArmorHypothesis> armor_hypotheses(const PredictedVehicle& vehicle)

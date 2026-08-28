@@ -22,6 +22,10 @@ add_test(NAME test_aimer_pipeline COMMAND test_aimer_pipeline)
 add_test(NAME test_shooter COMMAND test_shooter)
 add_test(NAME test_shooter_config COMMAND test_shooter_config)
 add_test(NAME test_board_adapter COMMAND test_board_adapter)
+add_test(NAME test_tiny_mpc COMMAND test_tiny_mpc)
+add_test(NAME test_planner COMMAND test_planner)
+add_test(NAME test_planner_config COMMAND test_planner_config)
+add_test(NAME test_aimer_preview COMMAND test_aimer_preview)
 
 add_executable(sentry sentry.cpp)
 add_executable(read_toml test/read_toml.cpp)
@@ -56,6 +60,11 @@ add_executable(test_aimer_visual test/test_aimer_visual.cpp)
 add_executable(test_shooter test/test_shooter.cpp)
 add_executable(test_shooter_config test/test_shooter_config.cpp)
 add_executable(test_board_adapter test/test_board_adapter.cpp board_adapter.cpp)
+add_executable(test_tiny_mpc test/test_tiny_mpc.cpp)
+add_executable(test_planner test/test_planner.cpp)
+add_executable(test_planner_config test/test_planner_config.cpp)
+add_executable(test_aimer_preview test/test_aimer_preview.cpp)
+add_executable(test_planner_benchmark test/test_planner_benchmark.cpp)
 
 target_compile_definitions(test_logger PRIVATE
     PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
@@ -77,6 +86,36 @@ target_link_libraries(sentry PRIVATE
 target_link_libraries(test_logger PRIVATE tools)
 
 target_link_libraries(test_trajectory PRIVATE tools)
+
+target_link_libraries(test_tiny_mpc PRIVATE tools)
+
+target_link_libraries(test_planner PRIVATE
+    app
+    tools
+    ${OpenCV_LIBS}
+    Eigen3::Eigen
+)
+
+target_link_libraries(test_planner_config PRIVATE
+    app
+    tools
+    ${OpenCV_LIBS}
+    Eigen3::Eigen
+)
+
+target_link_libraries(test_aimer_preview PRIVATE
+    app
+    tools
+    ${OpenCV_LIBS}
+    Eigen3::Eigen
+)
+
+target_link_libraries(test_planner_benchmark PRIVATE
+    app
+    tools
+    ${OpenCV_LIBS}
+    Eigen3::Eigen
+)
 
 target_link_libraries(test_vehicle_prediction PRIVATE
     app
@@ -322,7 +361,8 @@ foreach(test_target IN ITEMS
     test_solver_config test_extended_kalman_filter test_target test_association
     test_tracker test_tracker_config test_tracker_spherical_equivalence
     test_trajectory test_vehicle_prediction test_aimer_config test_aimer
-    test_aimer_pipeline test_shooter test_shooter_config test_board_adapter)
+    test_aimer_pipeline test_shooter test_shooter_config test_board_adapter test_tiny_mpc
+    test_planner test_planner_config test_aimer_preview test_planner_benchmark)
     target_compile_definitions(${test_target} PRIVATE
         PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 endforeach()

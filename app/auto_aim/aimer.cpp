@@ -263,7 +263,7 @@ namespace app::auto_aim
 			result.target_prediction_time_s = t_predict;
 
 			const double dt_predict = t_predict - target.timestamp_s;
-			const PredictedVehicle vehicle_at_predict = predict_vehicle(target, dt_predict);
+			const PredictedVehicle vehicle_at_predict = extrapolate_vehicle(target, dt_predict);
 
 			if(!vehicle_at_predict.center.allFinite())
 			{
@@ -304,7 +304,7 @@ namespace app::auto_aim
 				t_selection = t_predict + switch_advance;
 
 				const double dt_selection = t_selection - target.timestamp_s;
-				const PredictedVehicle vehicle_at_selection = predict_vehicle(target, dt_selection);
+				const PredictedVehicle vehicle_at_selection = extrapolate_vehicle(target, dt_selection);
 
 				if(!vehicle_at_selection.center.allFinite())
 				{
@@ -356,6 +356,15 @@ namespace app::auto_aim
 			return result;
 		}
 
+	/**
+	 * @brief SolveResult -> (yaw, pitch) 角度换算（aim() 与 sample_at 共用，避免复制）。
+	 */
+	Eigen::Vector2d to_aim_angles(const SolveResult& result, const AimerConfig& config)
+	{
+		return {std::atan2(result.aim_point.y(), result.aim_point.x()) + config.yaw_offset_rad,
+		        -(result.pitch + config.pitch_offset_rad)};
+	}
+
 	} // namespace
 
 	Aimer::Aimer(const AimerConfig& config): config_(config)
@@ -370,8 +379,39 @@ namespace app::auto_aim
 		active_target_token_.reset();
 	}
 
+	AimSample Aimer::sample_at(AimerPreviewState& state, const TrackedTarget& target,
+	                           double t_s, double bullet_speed_mps) const
+	{
+		AimSample sample;
+		sample.status = AimStatus::InvalidTarget;
+
+		// 复用 solve_at_prediction_time：predict -> 选板 -> 弹道（单次，不施加 delay / refinement）。
+		SolveResult result = solve_at_prediction_time(config_, state.lock_id,
+		                                              state.predictive_selected_armor_id,
+		                                              target, bullet_speed_mps, t_s);
+		if(!result.valid)
+		{
+			sample.status = result.status;
+			return sample;
+		}
+
+		const Eigen::Vector2d angles = to_aim_angles(result, config_);
+		sample.valid = true;
+		sample.status = AimStatus::Success;
+		sample.yaw_rad = angles.x();
+		sample.pitch_rad = angles.y();
+		sample.aim_point = result.aim_point;
+		sample.selected_armor_id = result.selected_armor_id;
+
+		// 演化 local previous id（PredictiveHysteresis 逐 sample hysteresis；
+		// SpCompat 的 lock_id 已由 solve_at_prediction_time 通过引用在内部演化）。
+		state.predictive_selected_armor_id = result.selected_armor_id;
+
+		return sample;
+	}
+
 	AimingSolution Aimer::aim(const TrackedTarget& target, double t_now_s, double bullet_speed_mps,
-	                          AimerDebugData* debug)
+	                          AimerDebugData* debug, PlannerPreviewSeed* seed)
 	{
 		if(debug != nullptr)
 		{
@@ -422,6 +462,12 @@ namespace app::auto_aim
 
 		// ---- transaction：捕获上一帧已提交 predictive 状态 ----
 		const std::optional<int> previous_predictive_id = predictive_selected_armor_id_;
+
+		// ---- preview baseline：在本次 transaction 修改选板状态之前捕获（保持时间因果）----
+		// 注意：不能使用"本帧 commit 后"的选板状态去回推 past reference，否则中心决策会反向污染过去。
+		AimerPreviewState preview_baseline;
+		preview_baseline.lock_id = lock_id_;
+		preview_baseline.predictive_selected_armor_id = predictive_selected_armor_id_;
 
 		if(debug != nullptr)
 		{
@@ -495,13 +541,24 @@ namespace app::auto_aim
 		// ---- 最终角度 ----
 		solution.valid = true;
 		solution.status = AimStatus::Success;
-		solution.yaw_rad =
-		    std::atan2(current.aim_point.y(), current.aim_point.x()) + config_.yaw_offset_rad;
-		solution.pitch_rad = -(current.pitch + config_.pitch_offset_rad);
+		const Eigen::Vector2d aim_angles = to_aim_angles(current, config_);
+		solution.yaw_rad = aim_angles.x();
+		solution.pitch_rad = aim_angles.y();
 		solution.selected_armor_id = current.selected_armor_id;
 
 		// ---- transaction commit：仅成功时提交 predictive 状态 ----
 		predictive_selected_armor_id_ = current.selected_armor_id;
+
+		// ---- planner preview seed（仅成功时填充）----
+		if(seed != nullptr)
+		{
+			seed->target_token = target.target_token;
+			seed->effective_bullet_speed_mps = bullet_speed;
+			seed->reference_center_time_s = current.target_prediction_time_s;
+			seed->reference_center_yaw_rad = solution.yaw_rad;
+			seed->reference_center_pitch_rad = solution.pitch_rad;
+			seed->preview_state = preview_baseline;
+		}
 
 		if(debug != nullptr)
 		{

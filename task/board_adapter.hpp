@@ -76,7 +76,7 @@ namespace task
 	/**
      * @brief AimResult -> GimbalCommand（fail-safe）。
      *
-     * control = has_aim && finite(yaw) && finite(pitch)；
+     * control = has_plan && finite(yaw) && finite(pitch)；
      * fire = result.fire && control。
      */
 	GimbalCommand make_gimbal_command(const app::auto_aim::AimResult& result);

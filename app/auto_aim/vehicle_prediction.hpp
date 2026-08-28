@@ -43,6 +43,16 @@ namespace app::auto_aim
 	PredictedVehicle predict_vehicle(const TrackedTarget& target, double dt_s);
 
 	/**
+	 * @brief 有符号纯运动学前推（dt_s 可为负）。
+	 *
+	 * 仅用于 Planner 构造 MPC reference 的 past 端（negative dt），
+	 * 不代表 Tracker 真的在"预测过去"。正常预测路径请使用 predict_vehicle()。
+	 *
+	 * 对 dt_s >= 0 与 predict_vehicle() 结果一致。
+	 */
+	PredictedVehicle extrapolate_vehicle(const TrackedTarget& target, double dt_s);
+
+	/**
 	 * @brief 由 PredictedVehicle 生成全部装甲板假设（armor_id 0..count-1）。
 	 *
 	 * 几何与 Target::armor_hypotheses() 完全一致：

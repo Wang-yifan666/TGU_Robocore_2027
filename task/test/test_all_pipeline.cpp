@@ -277,6 +277,7 @@ int main(int argc, char** argv)
 	app::auto_aim::Tracker tracker(app::auto_aim::make_default_tracker_config());
 	app::auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver), std::move(tracker),
 	                                app::auto_aim::Aimer(app::auto_aim::make_default_aimer_config()),
+	                                app::auto_aim::Planner(app::auto_aim::make_default_planner_config()),
 	                                app::auto_aim::Shooter(app::auto_aim::make_default_shooter_config()));
 
 	if(!auto_aim.is_ready())

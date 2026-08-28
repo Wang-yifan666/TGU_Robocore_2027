@@ -170,6 +170,45 @@ namespace app::auto_aim
 	};
 
 	/**
+	 * @brief Planner preview 使用的可演化局部状态快照（拷贝自 Aimer 跨帧状态）。
+	 *
+	 * 由 Planner 持有并逐 sample 演化；绝不影响 Aimer 成员。
+	 */
+	struct AimerPreviewState
+	{
+		std::optional<int> lock_id;                      ///< SpCompat armor lock。
+		std::optional<int> predictive_selected_armor_id; ///< PredictiveHysteresis 上一帧提交值。
+	};
+
+	/**
+	 * @brief 单次 preview 采样结果（在绝对时刻 t_s 的瞄准角）。
+	 */
+	struct AimSample
+	{
+		bool valid = false;
+		AimStatus status = AimStatus::InvalidTarget;
+		double yaw_rad = 0.0;    ///< = atan2(aim_point) + yaw_offset_rad。
+		double pitch_rad = 0.0;  ///< = -(pitch + pitch_offset_rad)。
+		Eigen::Vector3d aim_point = Eigen::Vector3d::Zero();
+		std::optional<int> selected_armor_id;
+	};
+
+	/**
+	 * @brief Aimer 成功求解后派生的 Planner preview seed。
+	 *
+	 * 由一次成功的 aim() 填充；携带 Planner 构造 reference 所需的全部时间/状态基准。
+	 */
+	struct PlannerPreviewSeed
+	{
+		std::uint64_t target_token = 0;           ///< 必须与 Planner 输入 target.target_token 一致。
+		double effective_bullet_speed_mps = 0.0;  ///< Aimer 已 resolve 的实际弹速（fallback 后）。
+		double reference_center_time_s = 0.0;     ///< 最终 target prediction time（含 delay + fly-time lead）。
+		double reference_center_yaw_rad = 0.0;    ///< = 本帧 raw AimingSolution.yaw_rad（unwrap anchor）。
+		double reference_center_pitch_rad = 0.0;  ///< = 本帧 raw AimingSolution.pitch_rad。
+		AimerPreviewState preview_state;          ///< 本帧 aim transaction 修改选板状态之前的 baseline。
+	};
+
+	/**
 	 * @brief Aimer：从 TrackedTarget 计算云台瞄准解。
 	 */
 	class Aimer
@@ -184,9 +223,19 @@ namespace app::auto_aim
 		 * @param t_now_s 本轮计算时刻（s，由调用方显式传入）。
 		 * @param bullet_speed_mps 弹丸初速度（m/s）。
 		 * @param debug 可选诊断输出。
+		 * @param seed 可选 planner preview seed（仅在 aim() 成功时填充）。
 		 */
 		AimingSolution aim(const TrackedTarget& target, double t_now_s, double bullet_speed_mps,
-		                   AimerDebugData* debug = nullptr);
+		                   AimerDebugData* debug = nullptr, PlannerPreviewSeed* seed = nullptr);
+
+		/**
+		 * @brief 无状态 preview 采样：在绝对时刻 t_s 求解瞄准角。
+		 *
+		 * 只演化调用方持有的 state（SpCompat 的 lock、PredictiveHysteresis 的 previous id），
+		 * 绝不修改 Aimer 成员。供 Planner 逐 sample 构造 reference 使用。
+		 */
+		AimSample sample_at(AimerPreviewState& state, const TrackedTarget& target,
+		                    double t_s, double bullet_speed_mps) const;
 
 		/**
 		 * @brief 清空 armor lock 状态与 target token 作用域。

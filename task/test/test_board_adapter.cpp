@@ -240,7 +240,7 @@ namespace
 
 		{
 			app::auto_aim::AimResult result;
-			result.has_aim = true;
+			result.has_plan = true;
 			result.fire = false;
 			result.yaw = 0.5;
 			result.pitch = -0.3;
@@ -252,7 +252,7 @@ namespace
 		}
 		{
 			app::auto_aim::AimResult result;
-			result.has_aim = true;
+			result.has_plan = true;
 			result.fire = true;
 			result.yaw = 0.5;
 			result.pitch = -0.3;
@@ -261,7 +261,7 @@ namespace
 		}
 		{
 			app::auto_aim::AimResult result;
-			result.has_aim = false;
+			result.has_plan = false;
 			result.fire = true; // 非法输入，仍须 fail-safe
 			result.yaw = nan;
 			result.pitch = nan;
@@ -270,8 +270,20 @@ namespace
 			runner.expect(command.yaw_rad == 0.0 && command.pitch_rad == 0.0, "yaw/pitch zero");
 		}
 		{
+			// has_aim=true 但 has_plan=false：即便 Shooter 单独判 true，也不允许 control/fire。
 			app::auto_aim::AimResult result;
 			result.has_aim = true;
+			result.has_plan = false;
+			result.fire = true;
+			result.yaw = 0.5;
+			result.pitch = -0.3;
+			const auto command = task::make_gimbal_command(result);
+			runner.expect(!command.control && !command.fire,
+			              "has_plan=false -> control/fire false (even if has_aim=true)");
+		}
+		{
+			app::auto_aim::AimResult result;
+			result.has_plan = true;
 			result.fire = true;
 			result.yaw = nan;
 			result.pitch = -0.3;
@@ -281,7 +293,7 @@ namespace
 		}
 		{
 			app::auto_aim::AimResult result;
-			result.has_aim = true;
+			result.has_plan = true;
 			result.fire = true;
 			result.yaw = 0.5;
 			result.pitch = nan;
@@ -291,7 +303,7 @@ namespace
 		}
 		{
 			app::auto_aim::AimResult first;
-			first.has_aim = true;
+			first.has_plan = true;
 			first.fire = true;
 			first.yaw = 0.5;
 			first.pitch = -0.3;
@@ -299,7 +311,7 @@ namespace
 			runner.expect(command.fire, "first fire true");
 
 			app::auto_aim::AimResult second;
-			second.has_aim = false;
+			second.has_plan = false;
 			second.fire = false;
 			second.yaw = nan;
 			second.pitch = nan;

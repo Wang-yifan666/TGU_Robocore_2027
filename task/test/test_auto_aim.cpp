@@ -280,6 +280,7 @@ namespace
 
 		return auto_aim::AutoAim(std::move(detector), std::move(solver), std::move(tracker),
 		                         auto_aim::Aimer(auto_aim::make_default_aimer_config()),
+		                         auto_aim::Planner(auto_aim::make_default_planner_config()),
 		                         auto_aim::Shooter(auto_aim::make_default_shooter_config()));
 	}
 
@@ -323,9 +324,10 @@ namespace
 		auto_aim::Tracker tracker(make_tracking_tracker_config());
 		auto_aim::Aimer aimer(aimer_config);
 		auto_aim::Shooter shooter(make_test_shooter_config());
+		auto_aim::Planner planner(auto_aim::make_default_planner_config());
 
 		return auto_aim::AutoAim(std::move(detector), std::move(solver), std::move(tracker),
-		                         std::move(aimer), std::move(shooter));
+		                         std::move(aimer), std::move(planner), std::move(shooter));
 	}
 
 	// ============================================================
@@ -979,6 +981,7 @@ namespace
 		auto_aim::Tracker tracker(auto_aim::make_default_tracker_config());
 		auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver), std::move(tracker),
 		                             auto_aim::Aimer(auto_aim::make_default_aimer_config()),
+		                             auto_aim::Planner(auto_aim::make_default_planner_config()),
 		                             auto_aim::Shooter(auto_aim::make_default_shooter_config()));
 
 		auto_aim::FrameContext frame;

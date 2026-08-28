@@ -71,10 +71,10 @@ namespace task
 	{
 		GimbalCommand command; // 默认 control=false, yaw/pitch=0, fire=false
 
-		const bool aim_valid =
-		    result.has_aim && std::isfinite(result.yaw) && std::isfinite(result.pitch);
+		const bool plan_valid =
+		    result.has_plan && std::isfinite(result.yaw) && std::isfinite(result.pitch);
 
-		if(aim_valid)
+		if(plan_valid)
 		{
 			command.control = true;
 			command.yaw_rad = result.yaw;

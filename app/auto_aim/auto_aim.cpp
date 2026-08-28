@@ -109,9 +109,9 @@ namespace app::auto_aim
 	} // namespace
 
 	AutoAim::AutoAim(Detector detector, Solver solver, Tracker tracker, Aimer aimer,
-	                 Shooter shooter):
+	                 Planner planner, Shooter shooter):
 	detector_(std::move(detector)), solver_(std::move(solver)), tracker_(std::move(tracker)),
-	aimer_(std::move(aimer)), shooter_(std::move(shooter))
+	aimer_(std::move(aimer)), planner_(std::move(planner)), shooter_(std::move(shooter))
 	{
 	}
 
@@ -120,6 +120,7 @@ namespace app::auto_aim
 		frame_count_ = 0;
 		tracker_.reset();
 		aimer_.reset();
+		planner_.reset();
 		shooter_.reset();
 		last_target_token_.reset();
 		LOG_INFO(kLogModule, "auto aim reset");
@@ -285,35 +286,37 @@ namespace app::auto_aim
 				last_target_token_ = tracked.target_token;
 			}
 
-			// ---- 7. Aimer：Tracking / TempLost 都可产生瞄准解 ----
-			const AimingSolution aiming =
-			    aimer_.aim(tracked, frame.timestamp_s, frame.bullet_speed_mps);
+			// ---- 7. Aimer：Tracking / TempLost 都可产生瞄准解 + preview seed ----
+			PlannerPreviewSeed seed;
+			const AimingSolution aiming = aimer_.aim(tracked, frame.timestamp_s,
+			                                         frame.bullet_speed_mps, nullptr, &seed);
+			result.has_aim = aiming.valid;
 
+			// ---- 8. Planner：仅当 Aimer 有效时规划（seed 由 aim 成功派生）----
 			if(aiming.valid)
 			{
-				result.has_aim = true;
-				result.yaw = aiming.yaw_rad;
-				result.pitch = aiming.pitch_rad;
+				result.planning = planner_.plan(seed, tracked, aimer_);
+				result.has_plan = result.planning.valid;
 
-				// ---- 8. Shooter：仅 Tracking 允许开火 ----
-				if(tracked.state == TrackerState::Tracking)
+				if(result.has_plan)
 				{
-					const double target_distance_m =
-					    std::hypot(tracked.center_in_world.x(), tracked.center_in_world.y());
-					result.fire = shooter_.shoot(aiming, target_distance_m,
-					                              frame.gimbal_yaw_rad);
+					result.yaw = result.planning.yaw_rad;
+					result.pitch = result.planning.pitch_rad;
 				}
-				else
-				{
-					// TempLost：有 aim 但禁止开火；清空射击历史，回 Tracking 时重新建立。
-					shooter_.reset();
-					result.fire = false;
-				}
+			}
+
+			// ---- 9. Shooter / fire fail-safe ----
+			// 只有 Tracking && aiming.valid && planning.valid 才允许 shoot；
+			// 其余一律 reset Shooter 并 fire=false，避免 Shooter 的
+			// previous_aiming_yaw 在无控制输出期间偷偷前进。
+			if(tracked.state == TrackerState::Tracking && aiming.valid && result.has_plan)
+			{
+				const double target_distance_m =
+				    std::hypot(tracked.center_in_world.x(), tracked.center_in_world.y());
+				result.fire = shooter_.shoot(aiming, target_distance_m, frame.gimbal_yaw_rad);
 			}
 			else
 			{
-				// Aimer invalid：本帧无 aim、禁止开火，并 reset Shooter，
-				// 使恢复后的第一帧重新建立历史并禁止开火。
 				shooter_.reset();
 				result.fire = false;
 			}

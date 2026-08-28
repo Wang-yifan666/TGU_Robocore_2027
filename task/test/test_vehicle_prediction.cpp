@@ -291,6 +291,32 @@ namespace
 		runner.end();
 	}
 
+	void test_extrapolate(TestRunner& runner)
+	{
+		runner.begin("Signed extrapolation (extrapolate_vehicle)");
+
+		const auto t = make_tracked_target(Eigen::Vector3d(1.0, 2.0, 3.0),
+		                                   Eigen::Vector3d(0.5, 0.5, 0.5), 0.0, 1.0, 0.2, 0.0, 0.0,
+		                                   4);
+
+		// 正向：与 predict_vehicle 一致。
+		const auto fwd = auto_aim::extrapolate_vehicle(t, 0.5);
+		const auto ref = auto_aim::predict_vehicle(t, 0.5);
+		runner.expect(near(fwd.center.x(), ref.center.x(), 1e-12), "forward center.x == predict");
+		runner.expect(near(fwd.center.y(), ref.center.y(), 1e-12), "forward center.y == predict");
+		runner.expect(near(fwd.center.z(), ref.center.z(), 1e-12), "forward center.z == predict");
+		runner.expect(near(fwd.yaw, ref.yaw, 1e-12), "forward yaw == predict");
+
+		// 负向：正确回推 center 与 yaw。
+		const auto bwd = auto_aim::extrapolate_vehicle(t, -0.5);
+		runner.expect(near(bwd.center.x(), 1.0 - 0.25, 1e-12), "backward center.x");
+		runner.expect(near(bwd.center.y(), 2.0 - 0.25, 1e-12), "backward center.y");
+		runner.expect(near(bwd.center.z(), 3.0 - 0.25, 1e-12), "backward center.z");
+		runner.expect(near(bwd.yaw, -0.5, 1e-12), "backward yaw");
+
+		runner.end();
+	}
+
 } // namespace
 
 int main()
@@ -305,6 +331,7 @@ int main()
 	test_rotation(runner);
 	test_alternating_radius_z(runner);
 	test_armor_indexing(runner);
+	test_extrapolate(runner);
 
 	runner.print_summary();
 

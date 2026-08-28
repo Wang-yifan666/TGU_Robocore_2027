@@ -25,6 +25,7 @@
 #include "app/auto_aim/aimer.hpp"
 #include "app/auto_aim/armor.hpp"
 #include "app/auto_aim/detector/detector.hpp"
+#include "app/auto_aim/planner.hpp"
 #include "app/auto_aim/shooter.hpp"
 #include "app/auto_aim/solver.hpp"
 #include "app/auto_aim/tracker.hpp"
@@ -134,20 +135,30 @@ namespace app::auto_aim
 		std::optional<TrackedTarget> tracked_target;
 
 		/**
-		 * @brief Aimer 是否成功产生有效 ballistic aiming solution。
+		 * @brief raw AimingSolution 是否有效（供 Shooter / diagnostic 使用）。
 		 */
 		bool has_aim = false;
 
 		/**
-		 * @brief Shooter 当前是否允许开火。
+		 * @brief Planner 最终控制轨迹是否有效（= planning.valid）。
+		 */
+		bool has_plan = false;
+
+		/**
+		 * @brief Planner 完整规划输出（position / velocity / acceleration）。
+		 */
+		PlanningSolution planning;
+
+		/**
+		 * @brief Shooter 当前是否允许开火（同时必须满足 has_plan）。
 		 */
 		bool fire = false;
 
 		/**
-		 * @brief Aimer 最终 ballistic compensated 目标角（仅 has_aim 时有效）。
+		 * @brief Planner 当前 position command（仅 has_plan 时有效）。
 		 *
-		 * 不是 Detector/Solver 阶段的 raw LOS；has_aim 为 false 时保持默认 0，
-		 * 调用方必须以 has_aim 判断有效性，不得用 0 值判断。
+		 * 已改为 Planner 控制输出；has_plan 为 false 时保持默认 0，
+		 * 调用方必须以 has_plan 判断有效性，不得用 0 值判断。
 		 */
 		double yaw = 0.0;
 		double pitch = 0.0;
@@ -217,7 +228,8 @@ namespace app::auto_aim
 		 * AutoAim 不读取 TOML、不构造模型/硬件依赖；各依赖已由
 		 * task/composition 层根据 config 构造后注入。
 		 */
-		AutoAim(Detector detector, Solver solver, Tracker tracker, Aimer aimer, Shooter shooter);
+		AutoAim(Detector detector, Solver solver, Tracker tracker, Aimer aimer, Planner planner,
+		        Shooter shooter);
 
 		/**
 		 * @brief 处理单帧输入。
@@ -239,6 +251,7 @@ namespace app::auto_aim
 		Solver solver_;
 		Tracker tracker_;
 		Aimer aimer_;
+		Planner planner_;
 		Shooter shooter_;
 
 		std::uint64_t frame_count_ = 0;

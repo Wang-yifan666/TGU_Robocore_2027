@@ -14,6 +14,7 @@
 
 #include "app/auto_aim/aimer_config.hpp"
 #include "app/auto_aim/auto_aim.hpp"
+#include "app/auto_aim/planner_config.hpp"
 #include "app/auto_aim/shooter_config.hpp"
 #include "app/auto_aim/tracker_config.hpp"
 #include "tools/logger.hpp"
@@ -101,6 +102,7 @@ int main(int argc, char** argv)
 
 	app::auto_aim::TrackerConfig tracker_config;
 	app::auto_aim::AimerConfig aimer_config;
+	app::auto_aim::PlannerConfig planner_config;
 	app::auto_aim::ShooterConfig shooter_config;
 
 	if(!app::auto_aim::load_tracker_config(
@@ -127,11 +129,20 @@ int main(int argc, char** argv)
 		return -1;
 	}
 
+	if(!app::auto_aim::load_planner_config(
+	       std::string(PROJECT_SOURCE_DIR) + "/config/app/auto_aim/planner.toml",
+	       planner_config))
+	{
+		LOG_ERROR(MODULE, "failed to load planner config");
+		return -1;
+	}
+
 	app::auto_aim::Tracker tracker(tracker_config);
 	app::auto_aim::Aimer aimer(aimer_config);
+	app::auto_aim::Planner planner(planner_config);
 	app::auto_aim::Shooter shooter(shooter_config);
 	app::auto_aim::AutoAim auto_aim(std::move(detector), std::move(solver), std::move(tracker),
-	                                std::move(aimer), std::move(shooter));
+	                                std::move(aimer), std::move(planner), std::move(shooter));
 
 	// 依赖未就绪时直接退出，避免每 10ms 空转刷 ERROR。
 	if(!auto_aim.is_ready())
