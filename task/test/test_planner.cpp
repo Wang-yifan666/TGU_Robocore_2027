@@ -278,6 +278,144 @@ namespace
 
 		runner.end();
 	}
+
+	void test_pi_crossing(TestRunner& runner)
+	{
+		runner.begin("+/-pi crossing (unwrapped reference continuity)");
+
+		auto_aim::Aimer aimer(auto_aim::make_default_aimer_config());
+		auto_aim::Planner planner(auto_aim::make_default_planner_config());
+
+		// 目标在负 x 轴附近横穿 y=0，bearing 从 -π 附近跨到 +π 附近。
+		const auto target = make_target(Eigen::Vector3d(-3.0, -0.05, 0.0),
+		                                Eigen::Vector3d(0.0, 0.2, 0.0), 0.0, 0.0, 0.2, 4);
+
+		auto_aim::PlannerPreviewSeed seed;
+		aimer.aim(target, 0.0, 23.0, nullptr, &seed);
+		auto_aim::PlannerDebugData debug;
+		const auto plan = planner.plan(seed, target, aimer, &debug);
+
+		runner.expect(plan.valid, "plan valid");
+
+		// unwrapped reference 连续（相邻差 < π，无 2π jump）。
+		bool continuous = true;
+
+		for(int j = 1; j < auto_aim::kPlannerHorizon + 2; ++j)
+		{
+			if(std::abs(debug.reference_yaw_samples[j] - debug.reference_yaw_samples[j - 1]) >= kPi)
+			{
+				continuous = false;
+			}
+		}
+
+		runner.expect(continuous, "unwrapped yaw reference has no ~2pi jump");
+
+		// raw yaw 总跨度 > π，证明 raw 确实跨了 ±π 边界（raw 值同时出现在 ±π 两侧）。
+		double raw_mn = debug.reference_yaw_raw_samples[0];
+		double raw_mx = debug.reference_yaw_raw_samples[0];
+
+		for(int j = 1; j < auto_aim::kPlannerHorizon + 2; ++j)
+		{
+			raw_mn = std::min(raw_mn, debug.reference_yaw_raw_samples[j]);
+			raw_mx = std::max(raw_mx, debug.reference_yaw_raw_samples[j]);
+		}
+
+		runner.expect(raw_mx - raw_mn > 3.0, "raw yaw spans > pi (real +/-pi crossing)");
+
+		// velocity 无 2π/DT 量级 spike。
+		double max_vel = 0.0;
+
+		for(int i = 0; i < auto_aim::kPlannerHorizon; ++i)
+		{
+			max_vel = std::max(max_vel, std::abs(debug.reference_yaw_velocity[i]));
+		}
+
+		runner.expect(max_vel < 10.0, "yaw velocity has no 2pi/DT spike");
+		runner.expect(std::abs(plan.yaw_rad) <= kPi + 1e-6, "output yaw wrapped to [-pi, pi)");
+
+		runner.end();
+	}
+
+	void test_central_difference(TestRunner& runner)
+	{
+		runner.begin("102-sample central difference invariant");
+
+		auto_aim::Aimer aimer(auto_aim::make_default_aimer_config());
+		auto_aim::Planner planner(auto_aim::make_default_planner_config());
+
+		const auto target = make_target(Eigen::Vector3d(3.0, 0.0, 0.0), Eigen::Vector3d(0.0, 2.0, 0.0),
+		                                0.0, 0.0, 0.2, 4);
+
+		auto_aim::PlannerPreviewSeed seed;
+		aimer.aim(target, 1.0, 23.0, nullptr, &seed);
+		auto_aim::PlannerDebugData debug;
+		const auto plan = planner.plan(seed, target, aimer, &debug);
+
+		runner.expect(plan.valid, "plan valid");
+
+		// sample[51] == reference center（anchor）。
+		runner.expect(near(debug.reference_yaw_samples[51], seed.reference_center_yaw_rad, 1e-9),
+		              "sample[51] == center anchor");
+
+		// 全部 100 个 velocity（含 ref[0] 与 ref[99]）都是中心差分，非单侧。
+		const double dt = auto_aim::kPlannerDt;
+		bool central = true;
+
+		for(int i = 0; i < auto_aim::kPlannerHorizon; ++i)
+		{
+			const double expected =
+			    (debug.reference_yaw_samples[i + 2] - debug.reference_yaw_samples[i]) / (2.0 * dt);
+
+			if(!near(debug.reference_yaw_velocity[i], expected, 1e-9))
+			{
+				central = false;
+			}
+		}
+
+		runner.expect(central, "all reference velocities use central difference (no one-sided)");
+
+		runner.end();
+	}
+
+	void test_armor_switch_early(TestRunner& runner)
+	{
+		runner.begin("Armor-switch early response");
+
+		auto_aim::Aimer aimer(auto_aim::make_default_aimer_config());
+		auto_aim::Planner planner(auto_aim::make_default_planner_config());
+
+		// 旋转 + has_armor_switch（非陀螺），horizon 内发生选板切换。
+		const auto target = make_target(Eigen::Vector3d(3.0, 0.0, 0.0), Eigen::Vector3d::Zero(),
+		                                0.0, 2.0, 0.2, 4, 1, true);
+
+		auto_aim::PlannerPreviewSeed seed;
+		aimer.aim(target, 1.0, 23.0, nullptr, &seed);
+		auto_aim::PlannerDebugData debug;
+		const auto plan = planner.plan(seed, target, aimer, &debug);
+
+		runner.expect(plan.valid, "plan valid");
+
+		// 找到 center(50) 之后第一次选板切换的 sample。
+		int switch_sample = -1;
+
+		for(int j = 52; j < auto_aim::kPlannerHorizon + 2; ++j)
+		{
+			if(debug.selected_armor_id[j] != debug.selected_armor_id[j - 1])
+			{
+				switch_sample = j;
+				break;
+			}
+		}
+
+		runner.expect(switch_sample > 50, "armor switch occurs in future horizon");
+
+		// center 处 Planner 已出现非零 yaw velocity（对未来切换提前响应）。
+		// 对照 baseline：test_stationary 静止目标 center velocity ≈ 0。
+		runner.expect(std::abs(plan.yaw_velocity_rad_s) > 0.05,
+		              "Planner has non-zero yaw velocity at center (anticipating future switch)");
+
+		runner.end();
+	}
 } // namespace
 
 int main()
@@ -294,6 +432,9 @@ int main()
 	test_solver_policy(runner);
 	test_acceleration_bound(runner);
 	test_fallback_bullet(runner);
+	test_pi_crossing(runner);
+	test_central_difference(runner);
+	test_armor_switch_early(runner);
 
 	runner.print_summary();
 

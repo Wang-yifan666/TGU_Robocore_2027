@@ -26,6 +26,7 @@ add_test(NAME test_tiny_mpc COMMAND test_tiny_mpc)
 add_test(NAME test_planner COMMAND test_planner)
 add_test(NAME test_planner_config COMMAND test_planner_config)
 add_test(NAME test_aimer_preview COMMAND test_aimer_preview)
+add_test(NAME test_planner_characterization COMMAND test_planner_characterization)
 
 add_executable(sentry sentry.cpp)
 add_executable(read_toml test/read_toml.cpp)
@@ -64,6 +65,7 @@ add_executable(test_tiny_mpc test/test_tiny_mpc.cpp)
 add_executable(test_planner test/test_planner.cpp)
 add_executable(test_planner_config test/test_planner_config.cpp)
 add_executable(test_aimer_preview test/test_aimer_preview.cpp)
+add_executable(test_planner_characterization test/test_planner_characterization.cpp)
 add_executable(test_planner_benchmark test/test_planner_benchmark.cpp)
 
 target_compile_definitions(test_logger PRIVATE
@@ -111,6 +113,13 @@ target_link_libraries(test_aimer_preview PRIVATE
 )
 
 target_link_libraries(test_planner_benchmark PRIVATE
+    app
+    tools
+    ${OpenCV_LIBS}
+    Eigen3::Eigen
+)
+
+target_link_libraries(test_planner_characterization PRIVATE
     app
     tools
     ${OpenCV_LIBS}
@@ -362,7 +371,8 @@ foreach(test_target IN ITEMS
     test_tracker test_tracker_config test_tracker_spherical_equivalence
     test_trajectory test_vehicle_prediction test_aimer_config test_aimer
     test_aimer_pipeline test_shooter test_shooter_config test_board_adapter test_tiny_mpc
-    test_planner test_planner_config test_aimer_preview test_planner_benchmark)
+    test_planner test_planner_config test_aimer_preview test_planner_benchmark
+    test_planner_characterization)
     target_compile_definitions(${test_target} PRIVATE
         PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 endforeach()

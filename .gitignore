@@ -4,6 +4,7 @@
 
 tmp/
 build/
+build-release/
 .cline/
 data/models/*
 !data/models/README.md

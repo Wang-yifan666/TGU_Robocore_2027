@@ -14,6 +14,7 @@
 #ifndef TGU_ROBOCORE_2027_AUTO_AIM_PLANNER_HPP
 #define TGU_ROBOCORE_2027_AUTO_AIM_PLANNER_HPP
 
+#include <array>
 #include <cstdint>
 
 #include <Eigen/Core>
@@ -80,12 +81,52 @@ namespace app::auto_aim
 		bool pitch_solved = false;
 		int yaw_iterations = 0;
 		int pitch_iterations = 0;
+
+		double yaw_input_primal_residual = 0.0;
+		double pitch_input_primal_residual = 0.0;
+
 		double yaw_primal_max_abs_acc = 0.0;
 		double yaw_projected_max_abs_acc = 0.0;
 		double pitch_primal_max_abs_acc = 0.0;
 		double pitch_projected_max_abs_acc = 0.0;
+
+		double yaw_max_primal_projected_delta = 0.0;
+		double pitch_max_primal_projected_delta = 0.0;
+
+		double yaw_center_primal_u = 0.0;
+		double yaw_center_projected_u = 0.0;
+		double pitch_center_primal_u = 0.0;
+		double pitch_center_projected_u = 0.0;
+
+		/// primal work->x center 与"用 projected u 从同一 x0 重积分"的 center 位置差。
+		double delta_yaw_center = 0.0;
+		double delta_pitch_center = 0.0;
+
 		double max_yaw_acceleration = 0.0;
 		double max_pitch_acceleration = 0.0;
+	};
+
+	/**
+	 * @brief Planner 旁路调试输出（test/characterization 用，默认 nullptr 零额外开销）。
+	 */
+	struct PlannerDebugData
+	{
+		/// 102 个 yaw angle samples（unwrap 后，连续）。
+		std::array<double, kPlannerHorizon + 2> reference_yaw_samples{};
+		/// 102 个 yaw angle samples（raw，unwrap 前，用于 ±π 穿越表征）。
+		std::array<double, kPlannerHorizon + 2> reference_yaw_raw_samples{};
+		/// 102 个 pitch angle samples。
+		std::array<double, kPlannerHorizon + 2> reference_pitch_samples{};
+		/// 100 个 yaw reference velocity（中心差分）。
+		std::array<double, kPlannerHorizon> reference_yaw_velocity{};
+		/// 100 个 pitch reference velocity（中心差分）。
+		std::array<double, kPlannerHorizon> reference_pitch_velocity{};
+		/// 每个 sample 的 selected armor id（-1 表示无）。
+		std::array<int, kPlannerHorizon + 2> selected_armor_id{};
+
+		double reference_generation_us = 0.0;
+		double yaw_mpc_us = 0.0;
+		double pitch_mpc_us = 0.0;
 	};
 
 	/**
@@ -125,7 +166,7 @@ namespace app::auto_aim
 		 * @param aimer 采样 provider（仅调用期使用，不保存引用）。
 		 */
 		PlanningSolution plan(const PlannerPreviewSeed& seed, const TrackedTarget& target,
-		                      const Aimer& aimer);
+		                      const Aimer& aimer, PlannerDebugData* debug = nullptr);
 
 		/// 无跨帧状态（每帧 cold start）；保留接口对称。
 		void reset();

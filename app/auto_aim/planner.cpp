@@ -6,6 +6,7 @@
 #include "app/auto_aim/planner.hpp"
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <string_view>
 
@@ -63,6 +64,36 @@ namespace app::auto_aim
 			return m;
 		}
 
+		double max_abs_primal_projected_delta(const tools::TinyMpc2d& solver)
+		{
+			double m = 0.0;
+
+			for(int k = 0; k < solver.horizon() - 1; ++k)
+			{
+				m = std::max(m, std::abs(solver.primal_acceleration(k) - solver.acceleration(k)));
+			}
+
+			return m;
+		}
+
+		// 从 x0 出发，用 projected u 按双积分器重积分到 center，与 primal center 位置比较。
+		double reintegrate_center_delta(const tools::TinyMpc2d& solver, const Eigen::Vector2d& x0)
+		{
+			double pos = x0(0);
+			double vel = x0(1);
+
+			for(int k = 0; k < kPlannerHalfHorizon; ++k)
+			{
+				const double u = solver.acceleration(k);
+				const double next_pos = pos + vel * kPlannerDt;
+				const double next_vel = vel + u * kPlannerDt;
+				pos = next_pos;
+				vel = next_vel;
+			}
+
+			return std::abs(solver.position(kPlannerHalfHorizon) - pos);
+		}
+
 	} // namespace
 
 	Planner::Planner(const PlannerConfig& config):
@@ -81,8 +112,15 @@ namespace app::auto_aim
 	}
 
 	PlanningSolution Planner::plan(const PlannerPreviewSeed& seed, const TrackedTarget& target,
-	                               const Aimer& aimer)
+	                               const Aimer& aimer, PlannerDebugData* debug)
 	{
+		using Clock = std::chrono::steady_clock;
+
+		if(debug != nullptr)
+		{
+			*debug = PlannerDebugData{};
+		}
+
 		PlanningSolution solution;
 		solution.status = PlanningStatus::InvalidTarget;
 		solution.diagnostics.max_yaw_acceleration = config_.max_yaw_acceleration_rad_s2;
@@ -112,6 +150,8 @@ namespace app::auto_aim
 		std::array<double, kSampleCount> raw_yaw{};
 		std::array<double, kSampleCount> pitch{};
 
+		const auto ref_t0 = Clock::now();
+
 		AimerPreviewState state = seed.preview_state;
 
 		for(int j = 0; j < kSampleCount; ++j)
@@ -129,6 +169,11 @@ namespace app::auto_aim
 
 			raw_yaw[j] = sample.yaw_rad;
 			pitch[j] = sample.pitch_rad;
+
+			if(debug != nullptr)
+			{
+				debug->selected_armor_id[j] = sample.selected_armor_id.value_or(-1);
+			}
 		}
 
 		// ---- yaw unwrap（anchor = raw aiming yaw = seed.reference_center_yaw_rad）----
@@ -152,12 +197,28 @@ namespace app::auto_aim
 		Eigen::Matrix<double, 2, kPlannerHorizon> yaw_ref;
 		Eigen::Matrix<double, 2, kPlannerHorizon> pitch_ref;
 
+		if(debug != nullptr)
+		{
+			for(int j = 0; j < kSampleCount; ++j)
+			{
+				debug->reference_yaw_samples[j] = unwrapped_yaw[j];
+				debug->reference_yaw_raw_samples[j] = raw_yaw[j];
+				debug->reference_pitch_samples[j] = pitch[j];
+			}
+		}
+
 		for(int i = 0; i < kPlannerHorizon; ++i)
 		{
 			yaw_ref(0, i) = unwrapped_yaw[i + 1] - anchor;
 			yaw_ref(1, i) = (unwrapped_yaw[i + 2] - unwrapped_yaw[i]) / (2.0 * kPlannerDt);
 			pitch_ref(0, i) = pitch[i + 1];
 			pitch_ref(1, i) = (pitch[i + 2] - pitch[i]) / (2.0 * kPlannerDt);
+
+			if(debug != nullptr)
+			{
+				debug->reference_yaw_velocity[i] = yaw_ref(1, i);
+				debug->reference_pitch_velocity[i] = pitch_ref(1, i);
+			}
 		}
 
 		// ---- x0 = reference horizon 样本 0（非实测云台状态）----
@@ -165,8 +226,20 @@ namespace app::auto_aim
 		const Eigen::Vector2d pitch_x0(pitch_ref(0, 0), pitch_ref(1, 0));
 
 		// ---- solve（cold start）----
+		const auto yaw_t0 = Clock::now();
 		const int yaw_code = yaw_solver_.solve(yaw_x0, yaw_ref);
+		const auto yaw_t1 = Clock::now();
 		const int pitch_code = pitch_solver_.solve(pitch_x0, pitch_ref);
+		const auto pitch_t1 = Clock::now();
+
+		if(debug != nullptr)
+		{
+			debug->reference_generation_us =
+			    std::chrono::duration<double, std::micro>(yaw_t0 - ref_t0).count();
+			debug->yaw_mpc_us = std::chrono::duration<double, std::micro>(yaw_t1 - yaw_t0).count();
+			debug->pitch_mpc_us =
+			    std::chrono::duration<double, std::micro>(pitch_t1 - yaw_t1).count();
+		}
 
 		// ---- 输出 ----
 		solution.target_yaw_rad =
@@ -193,6 +266,22 @@ namespace app::auto_aim
 		solution.diagnostics.yaw_projected_max_abs_acc = max_abs_projected(yaw_solver_);
 		solution.diagnostics.pitch_primal_max_abs_acc = max_abs_primal(pitch_solver_);
 		solution.diagnostics.pitch_projected_max_abs_acc = max_abs_projected(pitch_solver_);
+
+		solution.diagnostics.yaw_input_primal_residual = yaw_solver_.input_primal_residual();
+		solution.diagnostics.pitch_input_primal_residual = pitch_solver_.input_primal_residual();
+		solution.diagnostics.yaw_max_primal_projected_delta =
+		    max_abs_primal_projected_delta(yaw_solver_);
+		solution.diagnostics.pitch_max_primal_projected_delta =
+		    max_abs_primal_projected_delta(pitch_solver_);
+		solution.diagnostics.yaw_center_primal_u =
+		    yaw_solver_.primal_acceleration(kPlannerHalfHorizon);
+		solution.diagnostics.yaw_center_projected_u = yaw_solver_.acceleration(kPlannerHalfHorizon);
+		solution.diagnostics.pitch_center_primal_u =
+		    pitch_solver_.primal_acceleration(kPlannerHalfHorizon);
+		solution.diagnostics.pitch_center_projected_u =
+		    pitch_solver_.acceleration(kPlannerHalfHorizon);
+		solution.diagnostics.delta_yaw_center = reintegrate_center_delta(yaw_solver_, yaw_x0);
+		solution.diagnostics.delta_pitch_center = reintegrate_center_delta(pitch_solver_, pitch_x0);
 
 		// ---- acceptance：有限 + reference 有限；return code 仅 diagnostic ----
 		const bool finite = std::isfinite(solution.yaw_rad)

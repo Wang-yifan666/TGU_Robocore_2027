@@ -1043,10 +1043,12 @@ namespace
 		const auto r1 = auto_aim.process(make_shooter_frame(23.0, 0.0, 1.0));
 		runner.expect(r1.has_target, "frame1 has target");
 		runner.expect(r1.has_aim, "frame1 has aim");
+		runner.expect(r1.has_plan, "frame1 has plan");
 		runner.expect(!r1.fire, "frame1 first frame no fire");
 
 		const auto r2 = auto_aim.process(make_shooter_frame(23.0, r1.yaw, 1.1));
 		runner.expect(r2.has_aim, "frame2 has aim");
+		runner.expect(r2.has_plan, "frame2 has plan");
 		runner.expect(r2.fire, "frame2 fire true");
 
 		runner.end();
@@ -1068,6 +1070,7 @@ namespace
 		    make_shooter_frame(std::numeric_limits<double>::quiet_NaN(), 0.0, 1.0));
 		runner.expect(r.has_target, "has target");
 		runner.expect(!r.has_aim, "invalid bullet -> no aim");
+		runner.expect(!r.has_plan, "invalid bullet -> no plan");
 		runner.expect(!r.fire, "no fire");
 
 		runner.end();
@@ -1108,6 +1111,7 @@ namespace
 
 		const auto r2 = auto_aim.process(make_shooter_frame(23.0, 0.0, 1.1));
 		runner.expect(r2.has_target, "TempLost still has target");
+		runner.expect(r2.has_plan, "TempLost still has plan");
 		runner.expect(!r2.fire, "TempLost forbids fire");
 
 		runner.end();

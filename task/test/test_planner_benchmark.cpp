@@ -8,8 +8,12 @@
 
 #include "app/auto_aim/planner.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <numeric>
+#include <tuple>
+#include <vector>
 
 #include "test_logging.hpp"
 
@@ -65,22 +69,47 @@ int main()
 	}
 
 	constexpr int kIters = 500;
-	const auto t0 = std::chrono::steady_clock::now();
+
+	std::vector<double> aim_us, ref_us, yaw_us, pitch_us, total_us;
 
 	for(int i = 0; i < kIters; ++i)
 	{
 		auto_aim::PlannerPreviewSeed seed;
+
+		const auto a0 = std::chrono::steady_clock::now();
 		aimer.aim(target, 1.0, 23.0, nullptr, &seed);
-		planner.plan(seed, target, aimer);
+		const auto a1 = std::chrono::steady_clock::now();
+
+		auto_aim::PlannerDebugData debug;
+		const auto p0 = std::chrono::steady_clock::now();
+		planner.plan(seed, target, aimer, &debug);
+		const auto p1 = std::chrono::steady_clock::now();
+
+		aim_us.push_back(std::chrono::duration<double, std::micro>(a1 - a0).count());
+		ref_us.push_back(debug.reference_generation_us);
+		yaw_us.push_back(debug.yaw_mpc_us);
+		pitch_us.push_back(debug.pitch_mpc_us);
+		total_us.push_back(std::chrono::duration<double, std::micro>(p1 - p0).count());
 	}
 
-	const auto t1 = std::chrono::steady_clock::now();
-	const double total_ms =
-	    std::chrono::duration<double, std::milli>(t1 - t0).count();
-	const double per_plan_ms = total_ms / kIters;
+	auto stats = [](std::vector<double>& v) {
+		std::sort(v.begin(), v.end());
+		const double mean = std::accumulate(v.begin(), v.end(), 0.0) / v.size();
+		const double p95 = v[static_cast<std::size_t>(v.size() * 0.95)];
+		return std::tuple{v.front(), v.back(), mean, p95};
+	};
 
-	std::printf("Planner benchmark: %d iters, total %.2f ms, avg %.3f ms/plan (aim + reference + yaw/pitch MPC)\n",
-	            kIters, total_ms, per_plan_ms);
+	auto print = [&](const char* name, std::vector<double>& v) {
+		auto [mn, mx, mean, p95] = stats(v);
+		std::printf("%-22s min=%8.1f  max=%8.1f  mean=%8.1f  p95=%8.1f us\n", name, mn, mx, mean, p95);
+	};
+
+	std::printf("Planner Release benchmark (%d iters)\n\n", kIters);
+	print("Aimer::aim", aim_us);
+	print("reference generation", ref_us);
+	print("yaw TinyMPC", yaw_us);
+	print("pitch TinyMPC", pitch_us);
+	print("Planner total (plan)", total_us);
 
 	return 0;
 }

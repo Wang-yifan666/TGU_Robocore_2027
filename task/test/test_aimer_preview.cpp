@@ -4,6 +4,7 @@
  */
 
 #include "app/auto_aim/aimer.hpp"
+#include "app/auto_aim/planner.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -232,6 +233,41 @@ namespace
 
 		runner.end();
 	}
+
+	void test_center_invariant_via_evolution(TestRunner& runner)
+	{
+		runner.begin("center invariant after forward evolution");
+
+		const auto config = auto_aim::make_default_aimer_config();
+		auto_aim::Aimer aimer(config);
+
+		const auto target = make_target(Eigen::Vector3d(3.0, 0.0, 0.0), Eigen::Vector3d::Zero(),
+		                                0.0, 0.0, 0.2, 4);
+
+		auto_aim::PlannerPreviewSeed seed;
+		const auto aiming = aimer.aim(target, 1.0, 23.0, nullptr, &seed);
+		runner.expect(aiming.valid, "aim valid");
+
+		// 从 earliest ghost（center - 0.51s）一路正向演化到 center，最后一步即 center sample。
+		constexpr int kCenterIndex = auto_aim::kPlannerHalfHorizon + 1;
+		auto_aim::AimerPreviewState state = seed.preview_state;
+		auto_aim::AimSample center_sample;
+
+		for(int j = 0; j <= kCenterIndex; ++j)
+		{
+			const double t_j = seed.reference_center_time_s
+			    + (j - kCenterIndex) * auto_aim::kPlannerDt;
+			center_sample = aimer.sample_at(state, target, t_j, seed.effective_bullet_speed_mps);
+		}
+
+		runner.expect(center_sample.valid, "center sample valid after evolution");
+		runner.expect(near(center_sample.yaw_rad, seed.reference_center_yaw_rad, 1e-9),
+		              "evolved center yaw == raw aiming yaw");
+		runner.expect(near(center_sample.pitch_rad, seed.reference_center_pitch_rad, 1e-9),
+		              "evolved center pitch == raw aiming pitch");
+
+		runner.end();
+	}
 } // namespace
 
 int main()
@@ -245,6 +281,7 @@ int main()
 	test_state_isolation(runner);
 	test_hysteresis_evolution(runner);
 	test_token_scope(runner);
+	test_center_invariant_via_evolution(runner);
 
 	runner.print_summary();
 
